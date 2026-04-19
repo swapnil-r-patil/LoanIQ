@@ -43,7 +43,7 @@ export default function Processing() {
     let timeoutIds: NodeJS.Timeout[] = [];
 
     const runAnimations = async () => {
-      for (let i = 0; i < activeSteps.length; i++) {
+      for (let i = 0; i < activeSteps.length - 1; i++) {
         if (!isMounted) return;
         setCurrentStep(i);
         
@@ -56,7 +56,11 @@ export default function Processing() {
         if (!isMounted) return;
         setProgressPct(((i + 1) / activeSteps.length) * 100);
       }
-      setIsFinished(true);
+      
+      // Pause at the final step (95%) until API is actually done
+      if (!isMounted) return;
+      setCurrentStep(activeSteps.length - 1);
+      setProgressPct(95);
     };
 
     runAnimations();
@@ -81,10 +85,14 @@ export default function Processing() {
       const result = await processLoanData(payload);
       setState(prev => ({ ...prev, result }));
 
-      // Wait for animations to settle
+      // Complete the animation when API succeeds
+      setProgressPct(100);
+      setIsFinished(true);
+
+      // Wait a moment for the 100% checkmark to be seen before navigating
       setTimeout(() => {
         navigate('/result');
-      }, 3000);
+      }, 1500);
     } catch (err: any) {
       console.error('Processing error:', err);
       setError(err.message || 'Processing failed');
