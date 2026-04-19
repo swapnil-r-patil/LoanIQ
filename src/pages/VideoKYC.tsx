@@ -4,7 +4,9 @@ import { useLoan } from '../context/LoanContext';
 import { useLang } from '../context/LanguageContext';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import ThemeToggle from '../components/ThemeToggle';
-import { FaceMesh } from '@mediapipe/face_mesh';
+// Import removed to bypass Vite production build WASM path corruption.
+// We now use the global FaceMesh loaded from the CDN in index.html.
+const FaceMesh = (window as any).FaceMesh || (window as any).faceMesh?.FaceMesh;
 import {
   Mic, MicOff, Upload, Eye, CheckCircle, ChevronRight,
   AlertCircle, FileText, User, Banknote, Briefcase, Target, DollarSign

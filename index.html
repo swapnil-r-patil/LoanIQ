@@ -20,6 +20,8 @@
   </head>
 
   <body>
+    <!-- Load MediaPipe directly to bypass Vite/Rollup production bundler issues on Vercel -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
