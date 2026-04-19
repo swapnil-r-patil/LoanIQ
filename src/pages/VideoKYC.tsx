@@ -214,21 +214,42 @@ export default function VideoKYC() {
           }
         });
 
+        // Wait for FaceMesh to initialize before starting the loop
+        await faceMesh.initialize();
+
+        let isRunning = true;
+
         async function detectFrame() {
-          if (!faceTrackingRef.current) return;
-          if (videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
+          if (!faceTrackingRef.current || !isRunning) return;
+          // Only process frame when video has real dimensions and is playing
+          if (
+            videoRef.current &&
+            videoRef.current.readyState >= 2 &&
+            videoRef.current.videoWidth > 0 &&
+            !videoRef.current.paused
+          ) {
             try {
               await faceMesh.send({ image: videoRef.current });
-            } catch(e){
-              console.warn("FaceMesh frame processing error:", e);
+            } catch (e) {
+              console.warn('FaceMesh frame error:', e);
             }
           }
           requestAnimationFrame(detectFrame);
         }
 
-        videoRef.current.onloadeddata = () => {
-          detectFrame();
-        };
+        // Start the loop immediately - it will wait for video internally
+        detectFrame();
+
+        // Also hook into onloadeddata as a backup trigger
+        if (videoRef.current.readyState >= 2) {
+          // Video already loaded, loop started above
+        } else {
+          videoRef.current.onloadeddata = () => detectFrame();
+        }
+
+        // Cleanup: stop the RAF loop when component unmounts
+        const origCleanup = () => { isRunning = false; };
+        videoRef.current.addEventListener('emptied', origCleanup, { once: true });
       }
     } catch (e) {
       console.warn('FaceMesh initialization delayed or encountered an issue:', e);
