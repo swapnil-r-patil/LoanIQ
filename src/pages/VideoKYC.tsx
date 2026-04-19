@@ -45,9 +45,9 @@ export default function VideoKYC() {
   const [panFileName, setPanFileName] = useState('');
   const [livenessStep, setLivenessStep] = useState<'straight' | 'left' | 'right' | 'smile' | 'blink' | 'done'>('straight');
   const activeLivenessStepRef = useRef<'straight' | 'left' | 'right' | 'smile' | 'blink' | 'done'>('straight');
-  const [livenessTimer, setLivenessTimer] = useState(3);
-  const livenessTimerRef = useRef<any>(null);
+  const turnDirectionRef = useRef<'high'|'low'|''>('');
   const blinkCountRef = useRef(0);
+  const eyesOpenRef = useRef(true);
   const [blinkCount, setBlinkCount] = useState(0);
 
   const [livenessPass, setLivenessPass] = useState(false);
@@ -56,74 +56,125 @@ export default function VideoKYC() {
   const [error, setError] = useState('');
   const [answeredQuestions, setAnsweredQuestions] = useState<string[]>([]);
 
-  const LIVENESS_STEPS: Array<'straight' | 'left' | 'right' | 'smile' | 'blink'> = ['straight', 'left', 'right', 'smile', 'blink'];
-
-  function advanceLivenessStep() {
-    const current = activeLivenessStepRef.current;
-    const idx = LIVENESS_STEPS.indexOf(current as any);
-    if (idx === -1 || idx === LIVENESS_STEPS.length - 1) {
-      // Last step (blink) completed
-      activeLivenessStepRef.current = 'done';
-      setLivenessStep('done');
-      setLivenessPass(true);
-      clearInterval(livenessTimerRef.current);
-    } else {
-      const next = LIVENESS_STEPS[idx + 1];
-      activeLivenessStepRef.current = next;
-      setLivenessStep(next);
-      setLivenessTimer(3);
-      // For blink step, count up instead of auto-advancing
-      if (next === 'blink') {
-        clearInterval(livenessTimerRef.current);
-      }
-    }
-  }
-
-  // Start timed liveness
-  useEffect(() => {
-    if (phase !== 'liveness' || livenessPass) return;
-    clearInterval(livenessTimerRef.current);
-
-    if (livenessStep === 'blink') {
-      // blink step is manual — user taps button 3 times
-      return;
-    }
-
-    livenessTimerRef.current = setInterval(() => {
-      setLivenessTimer(prev => {
-        if (prev <= 1) {
-          advanceLivenessStep();
-          return 3;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(livenessTimerRef.current);
-  }, [livenessStep, phase, livenessPass]);
-
   useEffect(() => {
     faceTrackingRef.current = true;
     startCamera();
     return () => {
       faceTrackingRef.current = false;
-      clearInterval(livenessTimerRef.current);
       streamRef.current?.getTracks().forEach(t => t.stop());
       recognitionRef.current?.stop();
     };
   }, []);
 
   async function startCamera() {
+    // Step 1: Get camera stream
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      setFaceDetected(true);
-      setFaceInFrame(true);
+      if (videoRef.current) videoRef.current.srcObject = stream;
     } catch (e) {
       setError('Camera access failed. Please check permissions.');
+      return;
+    }
+
+    // Step 2: Load FaceMesh from LOCAL files (bundled in /public/face_mesh/)
+    // This avoids CDN issues on Vercel and works identically everywhere
+    try {
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `/face_mesh/${file}`
+      });
+
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      faceMesh.onResults((results) => {
+        if (!faceTrackingRef.current) return;
+
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          setFaceDetected(true);
+          const landmarks = results.multiFaceLandmarks[0];
+          const nose = landmarks[1];
+
+          // Face-in-frame check
+          if (nose.x > 0.15 && nose.x < 0.85 && nose.y > 0.15 && nose.y < 0.85) {
+            setFaceInFrame(true);
+          } else {
+            setFaceInFrame(false);
+          }
+          setMaskWarning(false);
+
+          const step = activeLivenessStepRef.current;
+          if (step === 'done') return;
+
+          const rEye = landmarks[263];
+          const lEye = landmarks[33];
+          const distR = Math.abs(nose.x - rEye.x);
+          const distL = Math.abs(nose.x - lEye.x);
+          const ratio = distR / (distL + 0.0001);
+
+          // EAR calculation
+          const reV1 = Math.hypot(landmarks[385].x - landmarks[380].x, landmarks[385].y - landmarks[380].y);
+          const reV2 = Math.hypot(landmarks[387].x - landmarks[373].x, landmarks[387].y - landmarks[373].y);
+          const reH = Math.hypot(landmarks[362].x - landmarks[263].x, landmarks[362].y - landmarks[263].y);
+          const rightEAR = (reV1 + reV2) / (2.0 * reH);
+          const leV1 = Math.hypot(landmarks[160].x - landmarks[144].x, landmarks[160].y - landmarks[144].y);
+          const leV2 = Math.hypot(landmarks[158].x - landmarks[153].x, landmarks[158].y - landmarks[153].y);
+          const leH = Math.hypot(landmarks[33].x - landmarks[133].x, landmarks[33].y - landmarks[133].y);
+          const leftEAR = (leV1 + leV2) / (2.0 * leH);
+          const avgEAR = (rightEAR + leftEAR) / 2.0;
+
+          if (step === 'straight') {
+            // Pass immediately on first detected frame — face is clearly in front
+            activeLivenessStepRef.current = 'left';
+            setLivenessStep('left');
+          } else if (step === 'left') {
+            if (ratio > 1.6) { turnDirectionRef.current = 'high'; activeLivenessStepRef.current = 'right'; setLivenessStep('right'); }
+            else if (ratio < 0.55) { turnDirectionRef.current = 'low'; activeLivenessStepRef.current = 'right'; setLivenessStep('right'); }
+          } else if (step === 'right') {
+            if (turnDirectionRef.current === 'high' && ratio < 0.55) { activeLivenessStepRef.current = 'smile'; setLivenessStep('smile'); }
+            else if (turnDirectionRef.current === 'low' && ratio > 1.6) { activeLivenessStepRef.current = 'smile'; setLivenessStep('smile'); }
+          } else if (step === 'smile') {
+            const mouthWidth = Math.hypot(landmarks[61].x - landmarks[291].x, landmarks[61].y - landmarks[291].y);
+            const eyeDist = Math.hypot(landmarks[33].x - landmarks[263].x, landmarks[33].y - landmarks[263].y);
+            const smileRatio = mouthWidth / (eyeDist + 0.0001);
+            if (smileRatio > 0.50) { activeLivenessStepRef.current = 'blink'; setLivenessStep('blink'); }
+          } else if (step === 'blink') {
+            const EAR_THRESHOLD = 0.22;
+            if (avgEAR < EAR_THRESHOLD) {
+              if (eyesOpenRef.current) {
+                eyesOpenRef.current = false;
+                const newCount = blinkCountRef.current + 1;
+                blinkCountRef.current = newCount;
+                setBlinkCount(newCount);
+                if (newCount >= 3) { activeLivenessStepRef.current = 'done'; setLivenessStep('done'); setLivenessPass(true); }
+              }
+            } else if (avgEAR > EAR_THRESHOLD + 0.04) {
+              eyesOpenRef.current = true;
+            }
+          }
+        } else {
+          setFaceDetected(false);
+        }
+      });
+
+      // Initialize FaceMesh BEFORE starting the loop
+      await faceMesh.initialize();
+
+      // Detection loop
+      const loop = async () => {
+        if (!faceTrackingRef.current) return;
+        if (videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0 && !videoRef.current.paused) {
+          try { await faceMesh.send({ image: videoRef.current }); } catch (_) {}
+        }
+        requestAnimationFrame(loop);
+      };
+      loop();
+    } catch (e) {
+      console.warn('FaceMesh failed to load:', e);
     }
   }
 
@@ -435,29 +486,11 @@ export default function VideoKYC() {
                   <div className="p-4 rounded-xl text-center bg-primary/10 border border-primary/20 space-y-3">
                     <p className="text-4xl">{livenessStepEmoji[livenessStep]}</p>
                     <p className="text-foreground text-lg font-semibold">{livenessInstructions[livenessStep]}</p>
-
-                    {livenessStep === 'blink' ? (
-                      // Manual blink button
-                      <div className="space-y-3">
-                        <p className="text-muted-foreground text-sm">Tap the button each time you blink</p>
-                        <button
-                          onClick={() => {
-                            const newCount = blinkCountRef.current + 1;
-                            blinkCountRef.current = newCount;
-                            setBlinkCount(newCount);
-                            if (newCount >= 3) advanceLivenessStep();
-                          }}
-                          className="w-full py-3 rounded-xl bg-primary text-white font-semibold text-lg hover:opacity-90 active:scale-95 transition-all"
-                        >
-                          👁️ Blink! ({blinkCount}/3)
-                        </button>
-                      </div>
-                    ) : (
-                      // Countdown timer
-                      <div className="flex items-center justify-center gap-3">
-                        <div className="w-12 h-12 rounded-full border-4 border-primary/30 border-t-primary flex items-center justify-center animate-spin" />
-                        <span className="text-2xl font-bold text-primary">{livenessTimer}s</span>
-                      </div>
+                    <div className="mt-2 flex justify-center">
+                      <div className="w-12 h-12 border-[4px] border-primary/20 border-t-primary rounded-full animate-spin" />
+                    </div>
+                    {livenessStep === 'blink' && (
+                      <p className="text-muted-foreground text-sm">Blink naturally — AI is detecting ({blinkCount}/3)</p>
                     )}
                   </div>
                 )}
