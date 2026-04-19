@@ -43,18 +43,34 @@ export default function VideoKYC() {
   
   const [panImage, setPanImage] = useState<string | null>(null);
   const [panFileName, setPanFileName] = useState('');
-  const [livenessStep, setLivenessStep] = useState<'straight' | 'left' | 'right' | 'smile' | 'blink' | 'done'>('straight');
-  const activeLivenessStepRef = useRef<'straight' | 'left' | 'right' | 'smile' | 'blink' | 'done'>('straight');
+  const [livenessStep, setLivenessStep] = useState<'idle' | 'straight' | 'left' | 'right' | 'smile' | 'blink' | 'done'>('straight');
+  const activeLivenessStepRef = useRef<'idle' | 'straight' | 'left' | 'right' | 'smile' | 'blink' | 'done'>('straight');
   const turnDirectionRef = useRef<'high'|'low'|''>('');
   const blinkCountRef = useRef(0);
   const eyesOpenRef = useRef(true);
   const [blinkCount, setBlinkCount] = useState(0);
-
+  
   const [livenessPass, setLivenessPass] = useState(false);
   const [phase, setPhase] = useState<'liveness' | 'questions' | 'pan' | 'complete'>('liveness');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
   const [answeredQuestions, setAnsweredQuestions] = useState<string[]>([]);
+
+  // Build display questions from translations
+  const QUESTIONS = QUESTION_META.map(q => ({ ...q, text: t(q.textKey), hint: t(q.hintKey) }));
+
+  // Reset answered questions when language changes to avoid stale detection state
+  useEffect(() => {
+    setAnsweredQuestions([]);
+  }, [lang]);
+
+  // Detect which questions have been answered based on keywords in transcript
+  useEffect(() => {
+    const newAnswered = detectAnsweredQuestions(transcript);
+    if (JSON.stringify(newAnswered.sort()) !== JSON.stringify([...answeredQuestions].sort())) {
+      setAnsweredQuestions(newAnswered);
+    }
+  }, [transcript]);
 
   useEffect(() => {
     faceTrackingRef.current = true;
@@ -67,117 +83,152 @@ export default function VideoKYC() {
   }, []);
 
   async function startCamera() {
-    // Step 1: Get camera stream
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
       streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
     } catch (e) {
       setError('Camera access failed. Please check permissions.');
       return;
     }
 
-    // Step 2: Load FaceMesh from LOCAL files (bundled in /public/face_mesh/)
-    // This avoids CDN issues on Vercel and works identically everywhere
     try {
-      const faceMesh = new FaceMesh({
-        locateFile: (file) => `/face_mesh/${file}`
-      });
+      if (videoRef.current) {
+        // Use unpkg CDN which is more CORS-friendly on deployed environments
+        const faceMesh = new FaceMesh({
+          locateFile: (file) => `https://unpkg.com/@mediapipe/face_mesh@0.4.1633559619/${file}`
+        });
 
-      faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
 
-      faceMesh.onResults((results) => {
-        if (!faceTrackingRef.current) return;
+        faceMesh.onResults((results) => {
+          if (!faceTrackingRef.current) return;
+          if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            setFaceDetected(true);
+            const landmarks = results.multiFaceLandmarks[0];
+            
+            const nose = landmarks[1];
+            if (nose.x > 0.15 && nose.x < 0.85 && nose.y > 0.15 && nose.y < 0.85) {
+              setFaceInFrame(true);
+            } else {
+              setFaceInFrame(false);
+            }
 
-        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-          setFaceDetected(true);
-          const landmarks = results.multiFaceLandmarks[0];
-          const nose = landmarks[1];
+            setMaskWarning(false);
 
-          // Face-in-frame check
-          if (nose.x > 0.15 && nose.x < 0.85 && nose.y > 0.15 && nose.y < 0.85) {
-            setFaceInFrame(true);
-          } else {
-            setFaceInFrame(false);
-          }
-          setMaskWarning(false);
+            const step = activeLivenessStepRef.current;
+            if (step !== 'idle' && step !== 'done') {
+              const rEye = landmarks[263];
+              const lEye = landmarks[33];
+              
+              const distR = Math.abs(nose.x - rEye.x);
+              const distL = Math.abs(nose.x - lEye.x);
+              const ratio = distR / (distL + 0.0001); 
 
-          const step = activeLivenessStepRef.current;
-          if (step === 'done') return;
+              const reV1 = Math.hypot(landmarks[385].x - landmarks[380].x, landmarks[385].y - landmarks[380].y);
+              const reV2 = Math.hypot(landmarks[387].x - landmarks[373].x, landmarks[387].y - landmarks[373].y);
+              const reH = Math.hypot(landmarks[362].x - landmarks[263].x, landmarks[362].y - landmarks[263].y);
+              const rightEAR = (reV1 + reV2) / (2.0 * reH);
 
-          const rEye = landmarks[263];
-          const lEye = landmarks[33];
-          const distR = Math.abs(nose.x - rEye.x);
-          const distL = Math.abs(nose.x - lEye.x);
-          const ratio = distR / (distL + 0.0001);
+              const leV1 = Math.hypot(landmarks[160].x - landmarks[144].x, landmarks[160].y - landmarks[144].y);
+              const leV2 = Math.hypot(landmarks[158].x - landmarks[153].x, landmarks[158].y - landmarks[153].y);
+              const leH = Math.hypot(landmarks[33].x - landmarks[133].x, landmarks[33].y - landmarks[133].y);
+              const leftEAR = (leV1 + leV2) / (2.0 * leH);
 
-          // EAR calculation
-          const reV1 = Math.hypot(landmarks[385].x - landmarks[380].x, landmarks[385].y - landmarks[380].y);
-          const reV2 = Math.hypot(landmarks[387].x - landmarks[373].x, landmarks[387].y - landmarks[373].y);
-          const reH = Math.hypot(landmarks[362].x - landmarks[263].x, landmarks[362].y - landmarks[263].y);
-          const rightEAR = (reV1 + reV2) / (2.0 * reH);
-          const leV1 = Math.hypot(landmarks[160].x - landmarks[144].x, landmarks[160].y - landmarks[144].y);
-          const leV2 = Math.hypot(landmarks[158].x - landmarks[153].x, landmarks[158].y - landmarks[153].y);
-          const leH = Math.hypot(landmarks[33].x - landmarks[133].x, landmarks[33].y - landmarks[133].y);
-          const leftEAR = (leV1 + leV2) / (2.0 * leH);
-          const avgEAR = (rightEAR + leftEAR) / 2.0;
+              const avgEAR = (rightEAR + leftEAR) / 2.0;
 
-          if (step === 'straight') {
-            // Pass immediately on first detected frame — face is clearly in front
-            activeLivenessStepRef.current = 'left';
-            setLivenessStep('left');
-          } else if (step === 'left') {
-            if (ratio > 1.6) { turnDirectionRef.current = 'high'; activeLivenessStepRef.current = 'right'; setLivenessStep('right'); }
-            else if (ratio < 0.55) { turnDirectionRef.current = 'low'; activeLivenessStepRef.current = 'right'; setLivenessStep('right'); }
-          } else if (step === 'right') {
-            if (turnDirectionRef.current === 'high' && ratio < 0.55) { activeLivenessStepRef.current = 'smile'; setLivenessStep('smile'); }
-            else if (turnDirectionRef.current === 'low' && ratio > 1.6) { activeLivenessStepRef.current = 'smile'; setLivenessStep('smile'); }
-          } else if (step === 'smile') {
-            const mouthWidth = Math.hypot(landmarks[61].x - landmarks[291].x, landmarks[61].y - landmarks[291].y);
-            const eyeDist = Math.hypot(landmarks[33].x - landmarks[263].x, landmarks[33].y - landmarks[263].y);
-            const smileRatio = mouthWidth / (eyeDist + 0.0001);
-            if (smileRatio > 0.50) { activeLivenessStepRef.current = 'blink'; setLivenessStep('blink'); }
-          } else if (step === 'blink') {
-            const EAR_THRESHOLD = 0.22;
-            if (avgEAR < EAR_THRESHOLD) {
-              if (eyesOpenRef.current) {
-                eyesOpenRef.current = false;
-                const newCount = blinkCountRef.current + 1;
-                blinkCountRef.current = newCount;
-                setBlinkCount(newCount);
-                if (newCount >= 3) { activeLivenessStepRef.current = 'done'; setLivenessStep('done'); setLivenessPass(true); }
+              if (step === 'straight') {
+                if (ratio > 0.75 && ratio < 1.25) {
+                  activeLivenessStepRef.current = 'left';
+                  setLivenessStep('left');
+                }
+              } else if (step === 'left') {
+                if (ratio > 1.6) {
+                  turnDirectionRef.current = 'high';
+                  activeLivenessStepRef.current = 'right';
+                  setLivenessStep('right');
+                } else if (ratio < 0.6) {
+                  turnDirectionRef.current = 'low';
+                  activeLivenessStepRef.current = 'right';
+                  setLivenessStep('right');
+                }
+              } else if (step === 'right') {
+                if (turnDirectionRef.current === 'high' && ratio < 0.6) {
+                   activeLivenessStepRef.current = 'smile';
+                   setLivenessStep('smile');
+                } else if (turnDirectionRef.current === 'low' && ratio > 1.6) {
+                   activeLivenessStepRef.current = 'smile';
+                   setLivenessStep('smile');
+                }
+              } else if (step === 'smile') {
+                const mouthWidth = Math.hypot(landmarks[61].x - landmarks[291].x, landmarks[61].y - landmarks[291].y);
+                const eyeDist = Math.hypot(landmarks[33].x - landmarks[263].x, landmarks[33].y - landmarks[263].y);
+                const smileRatio = mouthWidth / (eyeDist + 0.0001);
+                if (smileRatio > 0.52) {
+                   activeLivenessStepRef.current = 'blink';
+                   setLivenessStep('blink');
+                }
+              } else if (step === 'blink') {
+                const EAR_THRESHOLD = 0.22;
+                if (avgEAR < EAR_THRESHOLD) {
+                   if (eyesOpenRef.current) {
+                     eyesOpenRef.current = false;
+                     const newCount = blinkCountRef.current + 1;
+                     blinkCountRef.current = newCount;
+                     setBlinkCount(newCount);
+                     if (newCount >= 3) {
+                       activeLivenessStepRef.current = 'done';
+                       setLivenessStep('done');
+                       setLivenessPass(true);
+                     }
+                   }
+                } else if (avgEAR > EAR_THRESHOLD + 0.04) {
+                   eyesOpenRef.current = true;
+                }
               }
-            } else if (avgEAR > EAR_THRESHOLD + 0.04) {
-              eyesOpenRef.current = true;
+            }
+          } else {
+            setFaceDetected(false);
+          }
+        });
+
+        // More robust frame detection loop — waits for video to actually be playing
+        async function detectFrame() {
+          if (!faceTrackingRef.current) return;
+          if (videoRef.current && videoRef.current.readyState >= 2 && !videoRef.current.paused) {
+            try {
+              await faceMesh.send({ image: videoRef.current });
+            } catch(e) {
+              console.warn('FaceMesh frame send error:', e);
             }
           }
+          requestAnimationFrame(detectFrame);
+        }
+
+        // Wait for video to be playing — more reliable than onloadeddata on Vercel
+        const startDetection = () => {
+          console.log('✅ FaceMesh: video ready, starting detection loop');
+          detectFrame();
+        };
+
+        if (videoRef.current.readyState >= 2) {
+          startDetection();
         } else {
-          setFaceDetected(false);
+          videoRef.current.addEventListener('loadeddata', startDetection, { once: true });
+          videoRef.current.addEventListener('canplay', startDetection, { once: true });
         }
-      });
-
-      // Initialize FaceMesh BEFORE starting the loop
-      await faceMesh.initialize();
-
-      // Detection loop
-      const loop = async () => {
-        if (!faceTrackingRef.current) return;
-        if (videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0 && !videoRef.current.paused) {
-          try { await faceMesh.send({ image: videoRef.current }); } catch (_) {}
-        }
-        requestAnimationFrame(loop);
-      };
-      loop();
+      }
     } catch (e) {
-      console.warn('FaceMesh failed to load:', e);
+      console.error('FaceMesh initialization failed:', e);
     }
   }
-
 
   function startListening() {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -320,30 +371,8 @@ export default function VideoKYC() {
     }
   }
 
-  // Build display questions from translations
-  const QUESTIONS = QUESTION_META.map(q => ({ ...q, text: t(q.textKey), hint: t(q.hintKey) }));
-
-  // Reset answered questions when language changes
-  useEffect(() => { setAnsweredQuestions([]); }, [lang]);
-
-  // Detect answered questions from transcript
-  useEffect(() => {
-    const newAnswered = detectAnsweredQuestions(transcript);
-    if (JSON.stringify(newAnswered.sort()) !== JSON.stringify([...answeredQuestions].sort())) {
-      setAnsweredQuestions(newAnswered);
-    }
-  }, [transcript]);
-
-  const livenessStepEmoji: Record<string, string> = {
-    straight: '😐',
-    left: '👈',
-    right: '👉',
-    smile: '😄',
-    blink: '👁️',
-    done: '✅',
-  };
-
-  const livenessInstructions: Record<string, string> = {
+  const livenessInstructions = {
+    idle: '',
     straight: t('lookStraight'),
     left: t('turnLeft'),
     right: t('turnRight'),
@@ -458,7 +487,7 @@ export default function VideoKYC() {
               </div>
             )}
 
-            {/* Liveness Phase */}
+            {/* Liveness Phase (Now Phase 1) */}
             {phase === 'liveness' && (
               <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
                 <div className="flex items-center gap-2 text-foreground font-semibold">
@@ -467,31 +496,12 @@ export default function VideoKYC() {
                 </div>
                 <p className="text-muted-foreground text-sm">{t('livenessSub')}</p>
 
-                {/* Step Progress Dots */}
-                <div className="flex gap-2 justify-center">
-                  {(['straight','left','right','smile','blink'] as const).map((s) => {
-                    const idx = ['straight','left','right','smile','blink'].indexOf(s);
-                    const curIdx = ['straight','left','right','smile','blink'].indexOf(livenessStep as any);
-                    const isDone = livenessStep === 'done' || idx < curIdx;
-                    const isActive = s === livenessStep;
-                    return (
-                      <div key={s} className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                        isDone ? 'bg-emerald-400' : isActive ? 'bg-primary scale-125' : 'bg-border'
-                      }`} />
-                    );
-                  })}
-                </div>
-
                 {livenessStep !== 'done' && (
-                  <div className="p-4 rounded-xl text-center bg-primary/10 border border-primary/20 space-y-3">
-                    <p className="text-4xl">{livenessStepEmoji[livenessStep]}</p>
-                    <p className="text-foreground text-lg font-semibold">{livenessInstructions[livenessStep]}</p>
-                    <div className="mt-2 flex justify-center">
-                      <div className="w-12 h-12 border-[4px] border-primary/20 border-t-primary rounded-full animate-spin" />
+                  <div className={`p-4 rounded-xl text-center ${livenessPass ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-primary/10 border border-primary/20'}`}>
+                    <p className="text-foreground text-lg font-medium">{livenessInstructions[livenessStep]}</p>
+                    <div className="mt-4 flex justify-center">
+                      <div className="w-14 h-14 border-[5px] border-slate-200 dark:border-white/10 !border-t-blue-600 dark:!border-t-primary rounded-full animate-spin shadow-md" />
                     </div>
-                    {livenessStep === 'blink' && (
-                      <p className="text-muted-foreground text-sm">Blink naturally — AI is detecting ({blinkCount}/3)</p>
-                    )}
                   </div>
                 )}
 
