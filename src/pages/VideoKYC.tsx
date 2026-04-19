@@ -153,25 +153,28 @@ export default function VideoKYC() {
               const avgEAR = (rightEAR + leftEAR) / 2.0;
 
               if (step === 'straight') {
-                if (ratio > 0.75 && ratio < 1.25) {
+                // Relaxed from 0.75-1.25 to 0.55-1.6 for easier baseline passing
+                if (ratio > 0.55 && ratio < 1.6) {
                   activeLivenessStepRef.current = 'left';
                   setLivenessStep('left');
                 }
               } else if (step === 'left') {
-                if (ratio > 1.6) {
+                // Must turn distinctly
+                if (ratio > 1.7) {
                   turnDirectionRef.current = 'high';
                   activeLivenessStepRef.current = 'right';
                   setLivenessStep('right');
-                } else if (ratio < 0.6) {
+                } else if (ratio < 0.5) {
                   turnDirectionRef.current = 'low';
                   activeLivenessStepRef.current = 'right';
                   setLivenessStep('right');
                 }
               } else if (step === 'right') {
-                if (turnDirectionRef.current === 'high' && ratio < 0.6) {
+                // Must turn the opposite way
+                if (turnDirectionRef.current === 'high' && ratio < 0.5) {
                    activeLivenessStepRef.current = 'smile';
                    setLivenessStep('smile');
-                } else if (turnDirectionRef.current === 'low' && ratio > 1.6) {
+                } else if (turnDirectionRef.current === 'low' && ratio > 1.7) {
                    activeLivenessStepRef.current = 'smile';
                    setLivenessStep('smile');
                 }
