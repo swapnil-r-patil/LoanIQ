@@ -46,13 +46,10 @@ app.use((err, req, res, next) => {
 });
 
 // ─── Start ───────────────────────────────────────────────────────────────────
-// Only listen locally. Vercel Serverless handles the port automatically via exported app.
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-  app.listen(PORT, () => {
-    console.log(`\n🚀 Loan AI Backend running on http://localhost:${PORT}`);
-    console.log(`📊 Health: http://localhost:${PORT}/health`);
-    console.log(`🔗 Process: http://localhost:${PORT}/process-data\n`);
-  });
-}
+app.listen(PORT, () => {
+  console.log(`\n🚀 Loan AI Backend running on http://localhost:${PORT}`);
+  console.log(`📊 Health: http://localhost:${PORT}/health`);
+  console.log(`🔗 Process: http://localhost:${PORT}/process-data\n`);
+});
 
 module.exports = app;

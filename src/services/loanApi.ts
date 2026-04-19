@@ -67,7 +67,7 @@ export async function processLoanData(payload: ProcessDataPayload): Promise<Proc
   if (payload.userId) formData.append('userId', payload.userId);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 50000);
 
   let response;
   try {
@@ -79,7 +79,7 @@ export async function processLoanData(payload: ProcessDataPayload): Promise<Proc
     });
   } catch (err: any) {
     clearTimeout(timeoutId);
-    throw new Error(err.name === 'AbortError' ? 'Server processing timeout (15s limit)' : 'Network error');
+    throw new Error(err.name === 'AbortError' ? 'Server processing timeout (50s limit)' : 'Network error');
   }
   clearTimeout(timeoutId);
 
