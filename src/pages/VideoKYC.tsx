@@ -96,12 +96,9 @@ export default function VideoKYC() {
 
     try {
       if (videoRef.current) {
-        // Initialize Face Mesh - use unpkg as fallback for Vercel CDN compatibility
-        const faceMeshCDN = (file: string) => {
-          // Try jsdelivr first, which has proper CORS headers for WASM files
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`;
-        };
-        const faceMesh = new FaceMesh({ locateFile: faceMeshCDN });
+        const faceMesh = new FaceMesh({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
 
         faceMesh.setOptions({
           maxNumFaces: 1,
@@ -224,9 +221,14 @@ export default function VideoKYC() {
           requestAnimationFrame(detectFrame);
         }
 
-        videoRef.current.onloadeddata = () => {
+        // Start detection loop immediately if video is already playing
+        if (videoRef.current.readyState >= 2) {
           detectFrame();
-        };
+        } else {
+          videoRef.current.onloadeddata = () => {
+            detectFrame();
+          };
+        }
       }
     } catch (e) {
       console.warn('FaceMesh initialization delayed or encountered an issue:', e);
