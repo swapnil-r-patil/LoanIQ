@@ -98,7 +98,7 @@ export default function VideoKYC() {
       if (videoRef.current) {
         // Initialize Face Mesh Instead of basic Face Detection
         const faceMesh = new FaceMesh({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`
         });
 
         faceMesh.setOptions({
@@ -216,10 +216,12 @@ export default function VideoKYC() {
 
         async function detectFrame() {
           if (!faceTrackingRef.current) return;
-          if (videoRef.current && videoRef.current.readyState >= 2) {
+          if (videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
             try {
               await faceMesh.send({ image: videoRef.current });
-            } catch(e){}
+            } catch(e){
+              console.warn("FaceMesh frame processing error:", e);
+            }
           }
           requestAnimationFrame(detectFrame);
         }
