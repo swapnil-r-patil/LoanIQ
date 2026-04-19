@@ -1,0 +1,269 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ── LIGHT MODE (Glassmorphism) ─────────────────────────────────────── */
+  :root {
+    --background: 228 50% 96%;
+    --foreground: 224 60% 8%;          /* Very dark navy — main text */
+
+    --card: 0 0% 100%;
+    --card-foreground: 224 60% 8%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 60% 8%;
+
+    --primary: 262 83% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 228 35% 88%;
+    --secondary-foreground: 224 50% 12%;
+
+    --muted: 228 30% 88%;
+    --muted-foreground: 224 25% 35%;   /* Readable dark gray */
+
+    --accent: 262 60% 90%;
+    --accent-foreground: 262 60% 30%;
+
+    --destructive: 0 84% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 224 30% 55%;             /* Dark visible border */
+    --input: 228 35% 88%;
+    --ring: 262 83% 52%;
+    --radius: 0.75rem;
+
+    --gradient-primary: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+    --shadow-premium: 0 10px 30px -10px rgba(99, 102, 241, 0.25);
+  }
+
+  /* ── DARK MODE ──────────────────────────────────────────────────────── */
+  .dark {
+    --background: 224 71.4% 4.1%;
+    --foreground: 210 20% 98%;
+    --card: 224 71.4% 4.1%;
+    --card-foreground: 210 20% 98%;
+    --popover: 224 71.4% 4.1%;
+    --popover-foreground: 210 20% 98%;
+    --primary: 263.4 70% 50.4%;
+    --primary-foreground: 210 20% 98%;
+    --secondary: 215 27.9% 16.9%;
+    --secondary-foreground: 210 20% 98%;
+    --muted: 215 27.9% 16.9%;
+    --muted-foreground: 217.9 10.6% 64.9%;
+    --accent: 215 27.9% 16.9%;
+    --accent-foreground: 210 20% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 20% 98%;
+    --border: 215 27.9% 16.9%;
+    --input: 215 27.9% 16.9%;
+    --ring: 263.4 70% 50.4%;
+
+    --gradient-primary: linear-gradient(135deg, #4f46e5 0%, #9333ea 100%);
+    --shadow-premium: 0 10px 40px -15px rgba(0, 0, 0, 0.5);
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   GLASSMORPHISM LIGHT MODE — only when .dark is NOT on <html>
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* 1. Gradient background */
+html:not(.dark) body {
+  background: linear-gradient(
+    135deg,
+    #dde4ff 0%,
+    #ede9fe 25%,
+    #e0e7ff 50%,
+    #d4dcff 75%,
+    #e8eeff 100%
+  ) !important;
+  background-attachment: fixed !important;
+  min-height: 100vh;
+}
+
+/* 2. Frosted-glass cards — white glass + dark text */
+html:not(.dark) .bg-card,
+html:not(.dark) [class*="bg-card"] {
+  background: rgba(255, 255, 255, 0.70) !important;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1.5px solid rgba(80, 80, 180, 0.30) !important;
+  box-shadow:
+    0 4px 28px rgba(99, 102, 241, 0.10),
+    0 1px 0 rgba(255, 255, 255, 0.90) inset !important;
+}
+
+/* 3. Secondary/muted panels */
+html:not(.dark) .bg-secondary,
+html:not(.dark) [class*="bg-secondary"] {
+  background: rgba(210, 220, 255, 0.55) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* 4. Borders — dark so they're visible */
+html:not(.dark) [class*="border-border"],
+html:not(.dark) .border-border {
+  border-color: rgba(70, 70, 160, 0.35) !important;
+}
+
+/* 5. FORCE ALL TEXT DARK in light mode
+      — fixes white text that was designed for dark mode */
+html:not(.dark) .text-foreground,
+html:not(.dark) [class*="text-foreground"]:not([class*="primary-foreground"]) {
+  color: hsl(224, 60%, 8%) !important;
+}
+
+html:not(.dark) .text-muted-foreground,
+html:not(.dark) [class*="text-muted-foreground"]:not([class*="primary-foreground"]) {
+  color: hsl(224, 25%, 35%) !important;
+}
+
+/* Fix: white text should ONLY be forced dark if it's NOT on a dark/primary background */
+html:not(.dark) .text-white:not([class*="bg-black"]):not([class*="bg-primary"]):not([class*="bg-destructive"]):not([class*="bg-emerald-600"]) {
+  color: hsl(224, 60%, 10%) !important;
+}
+
+/* Ensure text-white on dark overlays stays white */
+html:not(.dark) [class*="bg-black"] .text-white,
+html:not(.dark) [class*="bg-black/"] .text-white,
+html:not(.dark) [class*="bg-slate-900"] .text-white {
+  color: white !important;
+}
+
+/* Ensure primary foreground stays white */
+html:not(.dark) .text-primary-foreground,
+.text-white-always {
+  color: white !important;
+}
+
+/* 6. Fix inputs */
+html:not(.dark) input,
+html:not(.dark) textarea {
+  background: rgba(255, 255, 255, 0.75) !important;
+  color: hsl(224, 60%, 8%) !important;
+  border-color: rgba(70, 70, 160, 0.35) !important;
+}
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: hsl(224, 20%, 55%) !important;
+}
+
+/* 7. Transparent backgrounds */
+html:not(.dark) .bg-background,
+html:not(.dark) [class*="bg-background"] {
+  background: transparent !important;
+}
+
+/* 8. Full-screen wrappers */
+html:not(.dark) [class*="min-h-screen"] {
+  background: transparent !important;
+}
+
+/* 9. Emerald/green cards - keep colour but fix text */
+html:not(.dark) [class*="bg-emerald-"],
+html:not(.dark) [class*="bg-green-"] {
+  color: hsl(160, 60%, 20%) !important;
+}
+
+/* 10. Tab / progress step items */
+html:not(.dark) [class*="rounded-xl"][class*="border"] {
+  border-color: rgba(70, 70, 160, 0.30) !important;
+}
+
+/* 11. Gradient overlays that look dark-only */
+html:not(.dark) [class*="from-emerald-900"],
+html:not(.dark) [class*="from-teal-900"] {
+  background: rgba(209, 250, 229, 0.50) !important;
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+/* 12. Question / step cards in VideoKYC */
+html:not(.dark) [class*="bg-card"] p,
+html:not(.dark) [class*="bg-card"] span,
+html:not(.dark) [class*="bg-card"] div,
+html:not(.dark) [class*="bg-card"] h1,
+html:not(.dark) [class*="bg-card"] h2,
+html:not(.dark) [class*="bg-card"] h3,
+html:not(.dark) [class*="bg-card"] h4,
+html:not(.dark) [class*="bg-card"] label {
+  color: inherit;
+}
+
+/* 13. Specific muted text colours inside light mode */
+html:not(.dark) [class*="text-slate-"] {
+  color: hsl(224, 25%, 38%) !important;
+}
+
+/* 14. Keep coloured labels (emerald, amber, red, blue, violet) as-is */
+html:not(.dark) [class*="text-emerald-"] { color: rgb(4 120 87) !important; }
+html:not(.dark) [class*="text-green-"]   { color: rgb(22 101 52) !important; }
+html:not(.dark) [class*="text-amber-"]  { color: rgb(146 64 14) !important; }
+html:not(.dark) [class*="text-red-"]    { color: rgb(185 28 28) !important; }
+html:not(.dark) [class*="text-blue-"]   { color: rgb(29 78 216) !important; }
+html:not(.dark) [class*="text-violet-"] { color: rgb(109 40 217) !important; }
+html:not(.dark) [class*="text-purple-"] { color: rgb(126 34 206) !important; }
+html:not(.dark) [class*="text-primary"] { color: hsl(262, 83%, 45%) !important; }
+html:not(.dark) [class*="text-indigo-"] { color: rgb(67 56 202) !important; }
+
+/* 15. Keep white text on gradient buttons */
+html:not(.dark) [class*="from-blue-6"][class*="to-violet-6"],
+html:not(.dark) [class*="from-emerald-5"][class*="to-teal-5"],
+html:not(.dark) [class*="bg-gradient-to-r"] {
+  color: white !important;
+}
+
+/* 16. Backdrop for popups / modals */
+html:not(.dark) [class*="rounded-2xl"][class*="border"] {
+  border-color: rgba(70, 70, 160, 0.28) !important;
+}
+
+/* 17. Toggle / badge chips with bg- colours */
+html:not(.dark) [class*="bg-blue-500/10"]  { color: rgb(29 78 216) !important; }
+html:not(.dark) [class*="bg-violet-500/10"]{ color: rgb(109 40 217) !important; }
+html:not(.dark) [class*="bg-red-500/10"]   { color: rgb(185 28 28) !important; }
+html:not(.dark) [class*="bg-amber-500/10"] { color: rgb(146 64 14) !important; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   UTILITIES
+   ═══════════════════════════════════════════════════════════════════ */
+@layer utilities {
+  .bg-gradient-primary  { background: var(--gradient-primary); }
+  .transition-smooth    { transition: var(--transition-smooth); }
+  .fill-foreground      { fill: hsl(var(--foreground)); }
+  .fill-muted-foreground{ fill: hsl(var(--muted-foreground)); }
+
+  .glass-panel {
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1.5px solid rgba(80, 80, 180, 0.28);
+    box-shadow: 0 4px 24px rgba(99, 102, 241, 0.09);
+  }
+  .dark .glass-panel {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SCROLLBAR
+   ═══════════════════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: rgba(99,102,241,0.06); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.30); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.55); }
