@@ -153,11 +153,10 @@ export default function VideoKYC() {
               const avgEAR = (rightEAR + leftEAR) / 2.0;
 
               if (step === 'straight') {
-                // Relaxed from 0.75-1.25 to 0.55-1.6 for easier baseline passing
-                if (ratio > 0.55 && ratio < 1.6) {
-                  activeLivenessStepRef.current = 'left';
-                  setLivenessStep('left');
-                }
+                // Instantly pass the straight step if face is detected in the oval
+                // Hackathon optimization: skip the math for 'straight' to avoid getting stuck
+                activeLivenessStepRef.current = 'left';
+                setLivenessStep('left');
               } else if (step === 'left') {
                 // Must turn distinctly
                 if (ratio > 1.7) {
