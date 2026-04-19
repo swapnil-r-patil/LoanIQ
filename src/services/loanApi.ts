@@ -66,11 +66,22 @@ export async function processLoanData(payload: ProcessDataPayload): Promise<Proc
   if (payload.location) formData.append('location', payload.location);
   if (payload.userId) formData.append('userId', payload.userId);
 
-  const response = await fetch(`${API_BASE}/process-data`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: formData.toString(),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}/process-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formData.toString(),
+      signal: controller.signal
+    });
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    throw new Error(err.name === 'AbortError' ? 'Server processing timeout (15s limit)' : 'Network error');
+  }
+  clearTimeout(timeoutId);
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: 'Network error' }));
