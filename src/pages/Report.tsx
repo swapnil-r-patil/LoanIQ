@@ -191,7 +191,7 @@ export default function Report() {
           >
             Back to Result
           </button>
-          {(decision === 'APPROVED' || decision === 'CONDITIONAL') && offer && (
+          {decision === 'APPROVED' && offer && (
             <button
               id="btn-report-accept"
               onClick={() => navigate('/disbursement')}
