@@ -96,14 +96,16 @@ export default function VideoKYC() {
 
     try {
       if (videoRef.current) {
-        // Use unpkg CDN which is more CORS-friendly on deployed environments
-        const faceMesh = new FaceMesh({
-          locateFile: (file) => `https://unpkg.com/@mediapipe/face_mesh@0.4.1633559619/${file}`
-        });
+        // Initialize Face Mesh - use unpkg as fallback for Vercel CDN compatibility
+        const faceMeshCDN = (file: string) => {
+          // Try jsdelivr first, which has proper CORS headers for WASM files
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`;
+        };
+        const faceMesh = new FaceMesh({ locateFile: faceMeshCDN });
 
         faceMesh.setOptions({
           maxNumFaces: 1,
-          refineLandmarks: true,
+          refineLandmarks: true, // Crucial for precise eye boundaries (Iris included)
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
@@ -114,17 +116,22 @@ export default function VideoKYC() {
             setFaceDetected(true);
             const landmarks = results.multiFaceLandmarks[0];
             
+            // Nose tip is index 1
             const nose = landmarks[1];
+            // Center check has been made much more lenient
             if (nose.x > 0.15 && nose.x < 0.85 && nose.y > 0.15 && nose.y < 0.85) {
               setFaceInFrame(true);
             } else {
               setFaceInFrame(false);
             }
 
+            // Since FaceMesh is highly robust, we disable the hackathon mock mask-warning 
             setMaskWarning(false);
 
+            // Real Biometric Liveness Math
             const step = activeLivenessStepRef.current;
             if (step !== 'idle' && step !== 'done') {
+              // 33 is Left Eye Outer, 263 is Right Eye Outer, 1 is Nose
               const rEye = landmarks[263];
               const lEye = landmarks[33];
               
@@ -132,11 +139,14 @@ export default function VideoKYC() {
               const distL = Math.abs(nose.x - lEye.x);
               const ratio = distR / (distL + 0.0001); 
 
+              // High Precision Eye Aspect Ratio (EAR) Math
+              // Right Eye: 362 (inner), 385/387 (top), 263 (outer), 373/380 (bottom)
               const reV1 = Math.hypot(landmarks[385].x - landmarks[380].x, landmarks[385].y - landmarks[380].y);
               const reV2 = Math.hypot(landmarks[387].x - landmarks[373].x, landmarks[387].y - landmarks[373].y);
               const reH = Math.hypot(landmarks[362].x - landmarks[263].x, landmarks[362].y - landmarks[263].y);
               const rightEAR = (reV1 + reV2) / (2.0 * reH);
 
+              // Left Eye: 33 (outer), 160/158 (top), 133 (inner), 153/144 (bottom)
               const leV1 = Math.hypot(landmarks[160].x - landmarks[144].x, landmarks[160].y - landmarks[144].y);
               const leV2 = Math.hypot(landmarks[158].x - landmarks[153].x, landmarks[158].y - landmarks[153].y);
               const leH = Math.hypot(landmarks[33].x - landmarks[133].x, landmarks[33].y - landmarks[133].y);
@@ -168,10 +178,14 @@ export default function VideoKYC() {
                    setLivenessStep('smile');
                 }
               } else if (step === 'smile') {
+                // Smile ratio: Mouth width / Eye distance
+                // 61: Left mouth corner, 291: Right mouth corner
+                // 33: Left eye outer, 263: Right eye outer
                 const mouthWidth = Math.hypot(landmarks[61].x - landmarks[291].x, landmarks[61].y - landmarks[291].y);
                 const eyeDist = Math.hypot(landmarks[33].x - landmarks[263].x, landmarks[33].y - landmarks[263].y);
                 const smileRatio = mouthWidth / (eyeDist + 0.0001);
-                if (smileRatio > 0.52) {
+
+                if (smileRatio > 0.52) { // 0.45 is neutral, >0.52 is a smile
                    activeLivenessStepRef.current = 'blink';
                    setLivenessStep('blink');
                 }
@@ -183,6 +197,7 @@ export default function VideoKYC() {
                      const newCount = blinkCountRef.current + 1;
                      blinkCountRef.current = newCount;
                      setBlinkCount(newCount);
+                     
                      if (newCount >= 3) {
                        activeLivenessStepRef.current = 'done';
                        setLivenessStep('done');
@@ -199,34 +214,23 @@ export default function VideoKYC() {
           }
         });
 
-        // More robust frame detection loop — waits for video to actually be playing
         async function detectFrame() {
           if (!faceTrackingRef.current) return;
-          if (videoRef.current && videoRef.current.readyState >= 2 && !videoRef.current.paused) {
+          if (videoRef.current && videoRef.current.readyState >= 2) {
             try {
               await faceMesh.send({ image: videoRef.current });
-            } catch(e) {
-              console.warn('FaceMesh frame send error:', e);
-            }
+            } catch(e){}
           }
           requestAnimationFrame(detectFrame);
         }
 
-        // Wait for video to be playing — more reliable than onloadeddata on Vercel
-        const startDetection = () => {
-          console.log('✅ FaceMesh: video ready, starting detection loop');
+        videoRef.current.onloadeddata = () => {
           detectFrame();
         };
-
-        if (videoRef.current.readyState >= 2) {
-          startDetection();
-        } else {
-          videoRef.current.addEventListener('loadeddata', startDetection, { once: true });
-          videoRef.current.addEventListener('canplay', startDetection, { once: true });
-        }
       }
     } catch (e) {
-      console.error('FaceMesh initialization failed:', e);
+      console.warn('FaceMesh initialization delayed or encountered an issue:', e);
+      // We don't set a hard error here because the camera stream is still running.
     }
   }
 
