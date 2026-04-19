@@ -87,9 +87,10 @@ async function extractPanDetails(base64Image, spokenName = '') {
     const imageData = base64Image.replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(imageData, 'base64');
 
-    // Run Tesseract OCR
+    // Run Tesseract OCR. Explicitly use /tmp for Vercel read-only filesystem
     const result = await Tesseract.recognize(buffer, 'eng', {
       logger: () => {}, // suppress progress
+      cachePath: '/tmp'
     });
 
     const text = result.data.text || '';

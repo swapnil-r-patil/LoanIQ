@@ -349,10 +349,48 @@ export default function VideoKYC() {
     const file = e.target.files?.[0];
     if (!file) return;
     setPanFileName(file.name);
+
+    if (file.type === 'application/pdf') {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setPanImage(ev.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // Compress image to avoid Vercel 4.5MB serverless payload limit
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const result = ev.target?.result as string;
-      setPanImage(result);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        // Max dimension 1200px
+        const maxDim = 1200;
+        if (width > height && width > maxDim) {
+          height *= maxDim / width;
+          width = maxDim;
+        } else if (height > maxDim) {
+          width *= maxDim / height;
+          height = maxDim;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          // Compress to 60% quality JPEG (reduces 5MB photo to ~200KB base64)
+          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
+          setPanImage(compressedBase64);
+        } else {
+          setPanImage(ev.target?.result as string); // fallback
+        }
+      };
+      img.src = ev.target?.result as string;
     };
     reader.readAsDataURL(file);
   }
