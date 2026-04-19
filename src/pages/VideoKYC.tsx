@@ -88,7 +88,14 @@ export default function VideoKYC() {
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        
+      }
+    } catch (e) {
+      setError('Camera access failed. Please check permissions.');
+      return;
+    }
+
+    try {
+      if (videoRef.current) {
         // Initialize Face Mesh Instead of basic Face Detection
         const faceMesh = new FaceMesh({
           locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
@@ -220,7 +227,8 @@ export default function VideoKYC() {
         };
       }
     } catch (e) {
-      setError('Camera access failed. Video preview unavailable.');
+      console.warn('FaceMesh initialization delayed or encountered an issue:', e);
+      // We don't set a hard error here because the camera stream is still running.
     }
   }
 
