@@ -281,9 +281,21 @@ function matchAmount(text: string): boolean {
   );
 }
 
+// ─── Q6: AGE ─────────────────────────────────────────────────────────────────
+
+function matchAge(text: string): boolean {
+  const ageWords = [
+    'age', 'old', 'years old', 'saal', 'varsh', 'umar', 'vayas', 'vaya',
+    'उम्र', 'वर्ष', 'साल', 'वय', 'वयाचे',
+  ];
+  return splitSentences(text).some(sentence =>
+    hasKeyword(sentence, ageWords) && hasNumericValue(sentence)
+  );
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export type QuestionId = 'name' | 'income' | 'jobType' | 'purpose' | 'amount';
+export type QuestionId = 'name' | 'income' | 'jobType' | 'purpose' | 'amount' | 'age';
 
 const MATCHERS: Record<QuestionId, (text: string) => boolean> = {
   name:    matchName,
@@ -291,6 +303,7 @@ const MATCHERS: Record<QuestionId, (text: string) => boolean> = {
   jobType: matchJobType,
   purpose: matchPurpose,
   amount:  matchAmount,
+  age:     matchAge,
 };
 
 /**

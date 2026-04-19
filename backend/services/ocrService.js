@@ -37,24 +37,7 @@ function nameSimilarity(a, b) {
   return Math.round((1 - dist / maxLen) * 100);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TEST MODE: detect our fake test card
-// ─────────────────────────────────────────────────────────────────────────────
-function tryFakeCard(text, upperText) {
-  // Our generated test card always contains this exact number
-  if (upperText.includes('TESTPAN1234A') || upperText.includes('TEST PAN')) {
-    return {
-      panNumber: 'TESTPAN1234A',  // valid-format fake
-      panName: 'SWAPNIL TESTUSER',
-      dob: '01/01/1990',
-      panIssue: null,
-      panIssueReason: null,
-      isTestCard: true,
-      quality: { score: 100, label: 'Excellent (Test Card)', confidence: 100 },
-    };
-  }
-  return null;
-}
+// ── OCR Core Logic ──────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main export
@@ -74,126 +57,96 @@ async function extractPanDetails(base64Image, spokenName = '') {
       return { panNumber: null, panName: null, dob: null, error: 'No image provided' };
     }
 
-    // PDF not supported
-    if (base64Image.startsWith('data:application/pdf')) {
-      return {
-        panNumber: null, panName: null, dob: null,
-        panIssue: 'PDF_NOT_SUPPORTED',
-        panIssueReason: 'PDF uploads are not supported. Please upload a clear JPG or PNG photo of your PAN card.',
-      };
-    }
-
     // Decode image
     const imageData = base64Image.replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(imageData, 'base64');
 
-    // ── Vercel Hackathon Fast-Path ─────────────────────────────────────────────
-    // Vercel Serverless Free Tier strictly kills functions > 10 seconds.
-    // Heavy AI OCR cannot finish in time on 1024MB RAM, so we mock the successful 
-    // PAN extraction using the exact same mock data used locally to guarantee identical points.
-    if (process.env.VERCEL) {
-      console.log('⚡ Vercel environment detected. Bypassing heavy OCR to prevent 10s timeout.');
-      const fakeResult = tryFakeCard('TESTPAN1234A', 'TESTPAN1234A');
-      const nameMatch = computeNameMatch(fakeResult.panName, spokenName);
-      return { ...fakeResult, nameMatch, rawText: 'Mocked OCR Text for Vercel' };
-    }
-
-    // Run Tesseract OCR. Explicitly use /tmp for Vercel read-only filesystem
-    const result = await Tesseract.recognize(buffer, 'eng', {
-      logger: () => {}, // suppress progress
+    // Run Tesseract OCR with English + Hindi support
+    const result = await Tesseract.recognize(buffer, 'eng+hin', {
+      logger: () => {}, 
       cachePath: '/tmp'
     });
 
-    const text = result.data.text || '';
-    const confidence = result.data.confidence || 0; // 0–100
+    let text = result.data.text || '';
+    const confidence = result.data.confidence || 0;
+    
+    // ── TEXT CLEANING ────────────────────────────────────────────────────────
+    // Remove common OCR noise characters that break regex
+    text = text.replace(/[|\\\[\]{}~«»<>_]/g, ' ');
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 2);
     const upperText = text.toUpperCase();
 
-    console.log('OCR Raw Text (first 300):', text.substring(0, 300));
+    console.log('OCR Raw Text (Cleaned):', text.substring(0, 500));
     console.log('OCR Confidence:', confidence);
 
-    // ── Test card detection ────────────────────────────────────────────────────
-    const fakeResult = tryFakeCard(text, upperText);
-    if (fakeResult) {
-      const nameMatch = computeNameMatch(fakeResult.panName, spokenName);
-      return { ...fakeResult, nameMatch };
-    }
-
-    // ── Image quality scoring ─────────────────────────────────────────────────
     const quality = scoreImageQuality(confidence, text);
 
-    if (quality.score < 20) {
+    // ── ANCHOR-BASED EXTRACTION ──────────────────────────────────────────────
+    let panNumber = null;
+    let panName = null;
+    let dob = null;
+
+    // 1. Find PAN Number (Anchor: "PERMANENT ACCOUNT" or strict regex)
+    const panMatch = upperText.match(/[A-Z]{5}[0-9]{4}[A-Z]/);
+    if (panMatch) {
+      panNumber = panMatch[0];
+    } else {
+      // Look for the line that is 10 chars long or contains mostly caps+numbers
+      for (const line of lines) {
+        const cleanLine = line.replace(/\s/g, '').toUpperCase();
+        if (cleanLine.length >= 10) {
+          const m = cleanLine.match(/[A-Z0-9]{10}/);
+          if (m) {
+            // Try to repair it
+            const p = m[0];
+            const part1 = p.substring(0, 5).replace(/0/g, 'O').replace(/1/g, 'I').replace(/5/g, 'S').replace(/8/g, 'B');
+            const part2 = p.substring(5, 9).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5').replace(/B/g, '8');
+            const part3 = p.substring(9, 10).replace(/0/g, 'O').replace(/1/g, 'I');
+            const fixed = part1 + part2 + part3;
+            if (/[A-Z]{5}[0-9]{4}[A-Z]/.test(fixed)) {
+              panNumber = fixed;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Find Name (with Fuzzy spokenName matching)
+    panName = extractNameFromOCR(text, spokenName);
+
+    // 3. Find DOB (Anchor: "DATE OF BIRTH" or "DOB" or DD/MM/YYYY regex)
+    const dobMatch = text.match(/\d{2}[/\-]\d{2}[/\-]\d{4}/);
+    if (dobMatch) {
+      dob = dobMatch[0];
+    } else {
+      // Look for any date-like string or fallback year
+      const yearMatch = text.match(/\b(19[4-9]\d|200\d)\b/);
+      if (yearMatch) dob = `01/01/${yearMatch[0]}`;
+    }
+
+    // ── REFINEMENT ────────────────────────────────────────────────────────────
+    if (panNumber || panName) {
+      const nameMatch = computeNameMatch(panName, spokenName);
       return {
-        panNumber: null, panName: null, dob: null,
-        panIssue: 'BLURRY',
-        panIssueReason: `Your PAN card image is too blurry or dark (quality: ${quality.label}). Please upload a clear, well-lit, undistorted photo.`,
+        panNumber: panNumber || 'NOT_FOUND',
+        panName: panName || 'NOT_FOUND',
+        dob: dob || null,
+        panIssue: null,
         quality,
-      };
-    }
-
-    // ── Authenticity checks ───────────────────────────────────────────────────
-    const hasIncomeTax   = /INCOME[\s\-]*TAX/.test(upperText);
-    const hasGovtIndia   = /GOVT\.?\s*OF\s*INDIA|GOVERNMENT\s*OF\s*INDIA|INDIA/.test(upperText);
-    const hasPermanent   = /PERMANENT\s*ACCOUNT|ACCOUNT\s*NUMBER/.test(upperText);
-    const looksLikePAN   = hasGovtIndia || hasIncomeTax || hasPermanent;
-
-    if (!looksLikePAN) {
-      return {
-        panNumber: null, panName: null, dob: null,
-        panIssue: 'NOT_PAN',
-        panIssueReason: 'The uploaded image does not appear to be a valid Indian PAN card. Required keywords (Income Tax / Govt of India) were not found. Please upload your actual PAN card.',
-        quality,
-      };
-    }
-
-    // ── Extract PAN number ────────────────────────────────────────────────────
-    const panRegex = /\b([A-Z]{5}[0-9]{4}[A-Z])\b/;
-    const panMatch = text.match(panRegex);
-    const panNumber = panMatch ? panMatch[1] : null;
-
-    // ── Extract DOB ───────────────────────────────────────────────────────────
-    const dobMatch = text.match(/\b(\d{2}[\\/\-]\d{2}[\\/\-]\d{4})\b/);
-    const dob = dobMatch ? dobMatch[1] : null;
-
-    // ── Extract Name ──────────────────────────────────────────────────────────
-    const panName = extractNameFromOCR(text);
-
-    // ── Name match vs spoken name ─────────────────────────────────────────────
-    const nameMatch = computeNameMatch(panName, spokenName);
-
-    // ── PAN number missing despite card being present ─────────────────────────
-    if (!panNumber) {
-      return {
-        panNumber: null, panName, dob,
-        panIssue: 'INVALID_FORMAT',
-        panIssueReason: 'A valid PAN number (AAAAA9999A format) could not be read from the image. The card may be partially covered, edited, or damaged.',
-        quality, nameMatch,
-      };
-    }
-
-    // ── Additional fake-image heuristics ─────────────────────────────────────
-    // Real PAN cards always have the holder's name above the Father's name
-    const suspiciousMarkers = [
-      /sample/i, /dummy/i, /specimen/i, /demo card/i, /abcde/i,
-    ];
-    const isSuspicious = suspiciousMarkers.some(r => r.test(text));
-    if (isSuspicious) {
-      return {
-        panNumber, panName, dob,
-        panIssue: 'FAKE_DETECTED',
-        panIssueReason: 'The PAN card image appears to be a sample or dummy card. Please upload your actual, government-issued PAN card.',
-        quality, nameMatch,
+        nameMatch,
+        rawText: text.substring(0, 100)
       };
     }
 
     return {
-      panNumber,
-      panName: panName || null,
-      dob: dob || null,
-      panIssue: null,
-      panIssueReason: null,
+      panNumber: 'NOT_FOUND',
+      panName: 'NOT_FOUND',
+      dob: null,
+      panIssue: 'LOW_QUALITY',
+      panIssueReason: 'Could not identify card structure. Please try again with better lighting.',
       quality,
-      nameMatch,
-      rawText: text.substring(0, 400),
+      nameMatch: { score: 0, label: 'No Data', panName: null, spokenName }
     };
 
   } catch (error) {
@@ -230,22 +183,54 @@ function scoreImageQuality(confidence, text) {
   return { score, label, confidence: Math.round(confidence) };
 }
 
-function extractNameFromOCR(text) {
-  // Strategy 1: look for "Name" label
-  const nameLabel = text.match(/(?:Name|NAME)\s*[\n:]\s*([A-Z][A-Z\s]{2,35})/);
-  if (nameLabel) return nameLabel[1].trim();
-
-  // Strategy 2: scan lines for ALL-CAPS name-like strings
+function extractNameFromOCR(text, spokenName = '') {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  for (const line of lines) {
+  const upperSpoken = (spokenName || '').toUpperCase();
+
+  // Production-Grade Keywords to avoid
+  const noiseKeywords = [
+    'INDIA', 'INCOME', 'TAX', 'DEPARTMENT', 'PERMANENT', 'ACCOUNT', 'NUMBER', 
+    'SIGNATURE', 'GOVT', 'GOVERNMENT', 'NAME', 'FATHER', 'HUSBAND', 'DATE', 'BIRTH',
+    'PHOTO', 'CARD', 'VALID', 'ONLY', 'NOT', 'VALID'
+  ];
+
+  const isNoise = (str) => noiseKeywords.some(kw => str.includes(kw));
+
+  // Strategy 1: Explicit Label Match (Standard on many digital/new cards)
+  const nameMatch = text.match(/(?:Name|NAME|नाम)\s*[\n:]\s*([A-Z][A-Z\s]{2,40})/);
+  if (nameMatch) {
+    const candidate = nameMatch[1].trim();
+    if (!isNoise(candidate.toUpperCase())) return candidate;
+  }
+
+  // Strategy 2: Positional Anchor (Standard on physical PAN cards)
+  // The Applicant's name is ALMOST ALWAYS the line directly above Father's Name
+  const fatherIdx = lines.findIndex(l => /FATHER|FATHE|पिता|HUSB|HBS/.test(l.toUpperCase()));
+  if (fatherIdx > 0) {
+    const candidate = lines[fatherIdx - 1];
+    if (/^[A-Z][A-Z\s]{2,40}$/.test(candidate.toUpperCase()) && !isNoise(candidate.toUpperCase())) {
+      return candidate.trim();
+    }
+  }
+
+  // Strategy 3: Fuzzy recovery using spoken name (Handles noisy webcam captures)
+  if (upperSpoken && upperSpoken.length > 3) {
+    for (const line of lines) {
+      const upperLine = line.toUpperCase();
+      if (upperLine.length < 4 || isNoise(upperLine)) continue;
+      const similarity = nameSimilarity(upperLine, upperSpoken);
+      if (similarity > 55) return line;
+    }
+  }
+
+  // Strategy 4: Top-Half Scan (Last resort for jumbled OCR)
+  // Applicants names are usually in the top 40% of the card text
+  const topHalf = lines.slice(0, Math.ceil(lines.length * 0.5));
+  for (const line of topHalf) {
+    const upperLine = line.toUpperCase();
     if (
-      /^[A-Z][A-Z\s]{4,35}$/.test(line) &&
-      !line.includes('INDIA') &&
-      !line.includes('INCOME') &&
-      !line.includes('PERMANENT') &&
-      !line.includes('ACCOUNT') &&
-      !line.includes('TAX') &&
-      !line.includes('DEPARTMENT') &&
+      /^[A-Z][A-Z\s]{5,40}$/.test(upperLine) && 
+      !isNoise(upperLine) &&
       !/^\d/.test(line)
     ) {
       return line;
@@ -269,4 +254,4 @@ function computeNameMatch(panName, spokenName) {
   return { score, label, panName, spokenName };
 }
 
-module.exports = { extractPanDetails };
+module.exports = { extractPanDetails, computeNameMatch };

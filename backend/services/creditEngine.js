@@ -50,26 +50,29 @@ function getIncomeTier(income) {
 }
 
 // ── 3. Main credit score computation ─────────────────────────────────────────
-function computeCreditScore({ pan, income, jobType, livenessPass, panQuality, nameMatch, loanAmount, loanPurpose }) {
+function computeCreditScore({ pan, income, jobType, livenessPass, panQuality, nameMatch, loanAmount, loanPurpose, faceAge, statedAge, idAge }) {
   let score = getBaseScore(pan);
   const adjustments = [];
 
-  // ── Factor 1: PAN Verification (+0 to +60) ───────────────────────────────
-  if (!pan) {
+  // ── Factor 1: PAN Verification (+0 to +20) ───────────────────────────────
+  if (!pan && !panQuality) {
     adjustments.push({ factor: 'PAN card not provided — base score reduced to 200', delta: 0 });
+  } else if (!pan && panQuality) {
+    score += 10;
+    adjustments.push({ factor: 'PAN card provided (OCR pending manual review)', delta: +10 });
   } else {
-    score += 60;
-    adjustments.push({ factor: 'PAN card verified (number extracted)', delta: +60 });
+    score += 20;
+    adjustments.push({ factor: 'PAN card verified (number extracted)', delta: +20 });
   }
 
-  // ── Factor 2: PAN Image Quality (+0 to +100 / -80) ───────────────────────
+  // ── Factor 2: PAN Image Quality (+0 to +50 / -80) ───────────────────────
   if (pan && panQuality) {
     if (panQuality.score >= 80) {
-      score += 100;
-      adjustments.push({ factor: `PAN image quality: ${panQuality.label} (${panQuality.score}/100) — excellent scan`, delta: +100 });
-    } else if (panQuality.score >= 60) {
       score += 50;
-      adjustments.push({ factor: `PAN image quality: ${panQuality.label} (${panQuality.score}/100) — good scan`, delta: +50 });
+      adjustments.push({ factor: `PAN image quality: ${panQuality.label} (${panQuality.score}/100) — excellent scan`, delta: +50 });
+    } else if (panQuality.score >= 60) {
+      score += 25;
+      adjustments.push({ factor: `PAN image quality: ${panQuality.label} (${panQuality.score}/100) — good scan`, delta: +25 });
     } else if (panQuality.score >= 40) {
       adjustments.push({ factor: `PAN image quality: ${panQuality.label} (${panQuality.score}/100) — acceptable`, delta: 0 });
     } else if (panQuality.score >= 20) {
@@ -81,11 +84,11 @@ function computeCreditScore({ pan, income, jobType, livenessPass, panQuality, na
     }
   }
 
-  // ── Factor 3: Identity Name Match (+120 / -20) ─────────────────────
+  // ── Factor 3: Identity Name Match (+60 / -20) ─────────────────────
   if (nameMatch && nameMatch.panName && nameMatch.spokenName) {
     if (nameMatch.score >= 90) {
-      score += 120;
-      adjustments.push({ factor: `Identity match: ${nameMatch.label} (${nameMatch.score}%) — exact`, delta: +120 });
+      score += 60;
+      adjustments.push({ factor: `Identity match: ${nameMatch.label} (${nameMatch.score}%) — exact`, delta: +60 });
     } else {
       score -= 20;
       adjustments.push({ factor: `Identity match: ${nameMatch.label} (${nameMatch.score}%) — similarity issues`, delta: -20 });
@@ -190,6 +193,42 @@ function computeCreditScore({ pan, income, jobType, livenessPass, panQuality, na
   } else {
     score -= 80;
     adjustments.push({ factor: 'Biometric liveness check FAILED — required for approval', delta: -80 });
+  }
+
+  // ── Factor 9: Biometric Age Match (+20 / -20) ──────────────────────────────
+  // AI vs ID Check
+  if (idAge && faceAge) {
+    const ageDiff = Math.abs(idAge - faceAge);
+    if (ageDiff <= 5) {
+      score += 20;
+      adjustments.push({ factor: `Biometric Identity Match: AI estimation (${faceAge}) confirms ID age (${idAge})`, delta: +20 });
+    } else {
+      score -= 20;
+      adjustments.push({ factor: `Biometric Identity Mismatch: Discrepancy between AI (${faceAge}) and ID (${idAge})`, delta: -20 });
+    }
+  }
+
+  // ── Factor 10: ID vs Stated Age Match (+20 / -10) ─────────────────────────
+  // User vs ID Check
+  if (idAge && statedAge) {
+    const ageDiff = Math.abs(idAge - statedAge);
+    if (ageDiff <= 3) {
+      score += 20;
+      adjustments.push({ factor: `Identity Verification: Stated age (${statedAge}) matches ID age (${idAge}) within 3yr tolerance`, delta: +20 });
+    } else {
+      score -= 10;
+      adjustments.push({ factor: `Identity Verification: Stated age (${statedAge}) mismatch with ID age (${idAge})`, delta: -10 });
+    }
+  }
+
+  // ── Factor 11: Stated Age vs AI Face Age Match (+20) ──────────────────────
+  // User vs AI Check
+  if (statedAge && faceAge) {
+    const ageDiff = Math.abs(statedAge - faceAge);
+    if (ageDiff <= 10) {
+      score += 20;
+      adjustments.push({ factor: `AI Interview Verification: Stated age matches AI biometric guess within 10yr allowance`, delta: +20 });
+    }
   }
 
   // ── Clamp to valid range 0–900 ────────────────────────────────────────────

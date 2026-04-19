@@ -9,7 +9,8 @@ import ThemeToggle from '../components/ThemeToggle';
 const FaceMesh = (window as any).FaceMesh || (window as any).faceMesh?.FaceMesh;
 import {
   Mic, MicOff, Upload, Eye, CheckCircle, ChevronRight,
-  AlertCircle, FileText, User, Banknote, Briefcase, Target, DollarSign
+  AlertCircle, FileText, User, Banknote, Briefcase, Target, DollarSign, Calendar,
+  X, Camera
 } from 'lucide-react';
 import { detectAnsweredQuestions } from '../utils/nlpMatcher';
 
@@ -19,6 +20,7 @@ const QUESTION_META = [
   { id: 'jobType' as const, textKey: 'q_jobType' as const, hintKey: 'q_jobType_hint' as const, icon: <Briefcase size={16} /> },
   { id: 'purpose' as const, textKey: 'q_purpose' as const, hintKey: 'q_purpose_hint' as const, icon: <Target size={16} /> },
   { id: 'amount'  as const, textKey: 'q_amount'  as const, hintKey: 'q_amount_hint'  as const, icon: <DollarSign size={16} /> },
+  { id: 'age'     as const, textKey: 'q_age'     as const, hintKey: 'q_age_hint'     as const, icon: <Calendar size={16} /> },
 ];
 
 
@@ -57,6 +59,53 @@ export default function VideoKYC() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
   const [answeredQuestions, setAnsweredQuestions] = useState<string[]>([]);
+  const [isScanningAge, setIsScanningAge] = useState(false);
+  const [isCapturingPan, setIsCapturingPan] = useState(false);
+  const [panCountdown, setPanCountdown] = useState<number | null>(null);
+  const countdownTimerRef = useRef<any>(null);
+  const phaseRef = useRef(phase);
+  const panImageRef = useRef(panImage);
+
+  const [ocrData, setOcrData] = useState<{ panNumber: string, panName: string, dob: string } | null>(null);
+  const [isOcrLoading, setIsOcrLoading] = useState(false);
+  const [ocrError, setOcrError] = useState('');
+
+  useEffect(() => {
+    phaseRef.current = phase;
+    if (phase === 'pan') {
+      setIsCapturingPan(true);
+    }
+  }, [phase]);
+  useEffect(() => { panImageRef.current = panImage; }, [panImage]);
+
+  useEffect(() => {
+    if (panImage && phase === 'pan' && !ocrData) {
+      const fetchOcr = async () => {
+        setIsOcrLoading(true);
+        setOcrError('');
+        try {
+          const res = await fetch('http://localhost:5000/api/ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ panImage, spokenName: transcript })
+          });
+          if (!res.ok) throw new Error('Failed to extract PAN details');
+          const data = await res.json();
+          setOcrData({
+            panNumber: data.panNumber === 'NOT_FOUND' ? '' : data.panNumber || '',
+            panName: data.panName === 'NOT_FOUND' ? '' : data.panName || '',
+            dob: data.dob || ''
+          });
+        } catch (err: any) {
+          setOcrError(err.message || 'OCR extraction failed');
+          setOcrData({ panNumber: '', panName: '', dob: '' });
+        } finally {
+          setIsOcrLoading(false);
+        }
+      };
+      fetchOcr();
+    }
+  }, [panImage, phase, ocrData]);
 
   // Build display questions from translations
   const QUESTIONS = QUESTION_META.map(q => ({ ...q, text: t(q.textKey), hint: t(q.hintKey) }));
@@ -86,7 +135,14 @@ export default function VideoKYC() {
 
   async function startCamera() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'user',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }, 
+        audio: false 
+      });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -109,10 +165,24 @@ export default function VideoKYC() {
           minTrackingConfidence: 0.5
         });
 
+        // Local variable to avoid re-triggering countdown while active
+        let countdownTriggered = false;
+
         faceMesh.onResults((results) => {
           if (!faceTrackingRef.current) return;
-          if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-            setFaceDetected(true);
+          
+          const facePresent = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
+          setFaceDetected(facePresent);
+
+          // AUTO PAN LOGIC: If no face detected while in PAN phase and not already captured
+          if (!facePresent && phaseRef.current === 'pan' && !panImageRef.current && !countdownTriggered) {
+             countdownTriggered = true;
+             startPanAutoCapture();
+             // Reset trigger after some time if capture didn't happen
+             setTimeout(() => { countdownTriggered = false; }, 10000);
+          }
+
+          if (facePresent) {
             const landmarks = results.multiFaceLandmarks[0];
             
             // Nose tip is index 1
@@ -201,6 +271,8 @@ export default function VideoKYC() {
                        activeLivenessStepRef.current = 'done';
                        setLivenessStep('done');
                        setLivenessPass(true);
+                       // Start age estimation when liveness is done
+                       estimateAge(landmarks);
                      }
                    }
                 } else if (avgEAR > EAR_THRESHOLD + 0.04) {
@@ -237,6 +309,33 @@ export default function VideoKYC() {
       // We don't set a hard error here because the camera stream is still running.
     }
   }
+
+  const [userFaceImage, setUserFaceImage] = useState<string | null>(null);
+  const [faceLandmarks, setFaceLandmarks] = useState<any>(null);
+
+  function estimateAge(landmarks: any) {
+    setFaceLandmarks(landmarks);
+    setIsScanningAge(true);
+
+    // Capture the user's face right now for the backend AI
+    if (videoRef.current) {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        setUserFaceImage(canvas.toDataURL('image/jpeg', 0.8));
+      }
+    }
+    
+    // Simulate processing time for the real AI model handshake
+    setTimeout(() => {
+      setIsScanningAge(false);
+      console.log('AI System ready for cloud inference.');
+    }, 2000);
+  }
+
 
   function startListening() {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -395,7 +494,95 @@ export default function VideoKYC() {
     reader.readAsDataURL(file);
   }
 
-    // function startLiveness() was removed because it now auto-starts
+  function capturePanFromVideo() {
+    if (videoRef.current) {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      const rect = video.getBoundingClientRect();
+      
+      // The guide box is w-72 (288px) and h-44 (176px), centered in the video container.
+      const guideWidth = 288;
+      const guideHeight = 176;
+      const guideX = (rect.width - guideWidth) / 2;
+      const guideY = (rect.height - guideHeight) / 2;
+      
+      // With object-cover, the video is scaled to completely cover the container, then centered.
+      const scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
+      
+      const visibleVideoWidth = video.videoWidth * scale;
+      const visibleVideoHeight = video.videoHeight * scale;
+      
+      const offsetX = (visibleVideoWidth - rect.width) / 2;
+      const offsetY = (visibleVideoHeight - rect.height) / 2;
+      
+      // Map DOM coordinates to actual video pixel coordinates
+      let cropX = (guideX + offsetX) / scale;
+      let cropY = (guideY + offsetY) / scale;
+      let cropWidth = guideWidth / scale;
+      let cropHeight = guideHeight / scale;
+      
+      // Add a 12% padding around the box to ensure all anchors and edges are captured
+      const paddingX = cropWidth * 0.12;
+      const paddingY = cropHeight * 0.12;
+      
+      cropX = Math.max(0, cropX - paddingX);
+      cropY = Math.max(0, cropY - paddingY);
+      cropWidth = Math.min(video.videoWidth - cropX, cropWidth + paddingX * 2);
+      cropHeight = Math.min(video.videoHeight - cropY, cropHeight + paddingY * 2);
+      
+      // Setup canvas to scale up the cropped dimensions by 4x for Ultra-HD OCR readability
+      const scaleUp = 4.0;
+      canvas.width = cropWidth * scaleUp;
+      canvas.height = cropHeight * scaleUp;
+      
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        // Enhance image quality for OCR
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.filter = 'contrast(1.2) brightness(1.2) grayscale(1)';
+        
+        // Front-facing cameras often mirror the feed, making text backwards.
+        // We MUST flip it horizontally so Tesseract can read it.
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.translate(-canvas.width, 0);
+
+        ctx.drawImage(
+          video, 
+          cropX, cropY, cropWidth, cropHeight, // Source rectangle
+          0, 0, canvas.width, canvas.height    // Destination rectangle
+        );
+        
+        ctx.restore();
+        
+        const base64 = canvas.toDataURL('image/jpeg', 0.95); // High quality
+        setPanImage(base64);
+        setPanFileName('pan_camera_capture.jpg');
+        setIsCapturingPan(false);
+        setPanCountdown(null);
+        
+        // Update context immediately
+        setState(prev => ({ ...prev, panImage: base64 }));
+      }
+    }
+  }
+
+
+  function startPanAutoCapture() {
+    setIsCapturingPan(true);
+    setPanCountdown(3);
+    const timer = setInterval(() => {
+      setPanCountdown(prev => {
+        if (prev === 1) {
+          clearInterval(timer);
+          capturePanFromVideo();
+          return null;
+        }
+        return prev ? prev - 1 : null;
+      });
+    }, 1000);
+  }
 
   async function handleSubmit() {
     setIsProcessing(true);
@@ -409,7 +596,15 @@ export default function VideoKYC() {
       }));
 
       navigate('/processing', {
-        state: { transcript, panImage, livenessPass, location: state.location }
+        state: { 
+          transcript, 
+          panImage, 
+          livenessPass, 
+          location: state.location, 
+          userFaceImage, 
+          faceLandmarks,
+          editedPanDetails: ocrData ? JSON.stringify(ocrData) : null
+        }
       });
     } catch (e: any) {
       setError(e.message);
@@ -471,29 +666,52 @@ export default function VideoKYC() {
                   <span className="text-white-always text-xs font-medium">Camera Active</span>
                 </div>
               </div>
-              {/* Face guide */}
+              {/* Face guide / PAN guide */}
               <div className="absolute inset-0 flex items-center justify-center">
-                <div className={`w-52 h-64 border-2 rounded-[50%] transition-colors duration-300 ${
-                  faceInFrame ? 'border-blue-400/50 shadow-[0_0_20px_rgba(96,165,250,0.2)]' : 'border-red-500 shadow-[0_0_30px_rgba(239,68,68,0.5)]'
-                }`} />
+                {isCapturingPan ? (
+                  <div className={`w-72 h-44 border-2 rounded-xl transition-all duration-300 border-dashed ${
+                    panImage ? 'border-emerald-400 bg-emerald-400/10' : 'border-blue-400/60'
+                  }`}>
+                    {panCountdown !== null && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                        <div className="text-4xl font-bold text-blue-400 animate-ping">{panCountdown}</div>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); capturePanFromVideo(); }}
+                          className="bg-blue-600/80 hover:bg-blue-600 text-white-always text-[10px] font-bold px-4 py-2 rounded-full backdrop-blur-sm transition-all flex items-center gap-2"
+                        >
+                          <Camera size={14} /> {t('captureNow')}
+                        </button>
+                      </div>
+                    )}
+                    <div className="absolute inset-x-0 -bottom-8 flex justify-center">
+                      <div className="text-[10px] text-blue-400 font-bold uppercase tracking-widest bg-blue-500/10 px-3 py-1 rounded-full border border-blue-400/20">
+                        {t('alignCard')}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={`w-52 h-64 border-2 rounded-[50%] transition-colors duration-300 ${
+                    faceInFrame ? 'border-blue-400/50 shadow-[0_0_20px_rgba(96,165,250,0.2)]' : 'border-red-500 shadow-[0_0_30px_rgba(239,68,68,0.5)]'
+                  }`} />
+                )}
               </div>
               
               {/* Overlay Alert */}
-              {!faceDetected ? (
+              {!faceDetected && phase !== 'pan' ? (
                 <div className="absolute inset-0 bg-red-950/40 backdrop-blur-[2px] flex flex-col items-center justify-center z-10 transition-all duration-300">
                   <div className="bg-red-500 text-white-always px-6 py-3 rounded-full font-semibold shadow-[0_0_20px_rgba(239,68,68,0.5)] animate-bounce flex items-center gap-2">
                     <AlertCircle size={20} />
                     {t('faceNotDetected')}
                   </div>
                 </div>
-              ) : !faceInFrame ? (
+              ) : !faceInFrame && phase !== 'pan' ? (
                 <div className="absolute inset-0 bg-red-950/40 backdrop-blur-[2px] flex flex-col items-center justify-center z-10 transition-all duration-300">
                   <div className="bg-red-500 text-white-always px-6 py-3 rounded-full font-semibold shadow-[0_0_20px_rgba(239,68,68,0.5)] flex items-center gap-2">
                     <AlertCircle size={20} />
                     {t('centerFace')}
                   </div>
                 </div>
-              ) : maskWarning ? (
+              ) : maskWarning && phase !== 'pan' ? (
                 <div className="absolute inset-0 bg-amber-950/40 backdrop-blur-[1px] flex flex-col items-center justify-center z-10 transition-all duration-300">
                   <div className="bg-amber-500 text-white-always px-6 py-3 rounded-full font-semibold shadow-[0_0_20px_rgba(245,158,11,0.5)] flex items-center gap-2 animate-pulse">
                     <AlertCircle size={20} />
@@ -501,6 +719,24 @@ export default function VideoKYC() {
                   </div>
                 </div>
               ) : null}
+
+              {/* Age Scanning Overlay */}
+              {isScanningAge && (
+                <div className="absolute inset-0 bg-blue-900/30 backdrop-blur-[2px] flex flex-col items-center justify-center z-20">
+                  <div className="w-16 h-16 border-4 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
+                  <div className="bg-blue-600 text-white-always px-6 py-2 rounded-full font-bold shadow-lg animate-pulse">
+                    {t('scanningAge')}
+                  </div>
+                </div>
+              )}
+              {isScanningAge && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
+                  <div className="bg-card/90 p-4 rounded-2xl border border-primary/30 flex flex-col items-center gap-3 animate-in fade-in zoom-in duration-300">
+                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs font-bold text-primary">CALIBRATING WITH REAL AI...</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -665,41 +901,107 @@ export default function VideoKYC() {
             {phase === 'pan' && (
               <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
                 <div className="flex items-center gap-2 text-foreground font-semibold">
-                  <Upload size={18} className="text-primary" />
+                  <Camera size={18} className="text-primary" />
                   {t('uploadPAN')}
                 </div>
-                <p className="text-muted-foreground text-sm">{t('uploadPANSub')}</p>
+                
+                {!panImage ? (
+                  <div className="p-6 rounded-2xl border-2 border-dashed border-primary/30 bg-primary/5 flex flex-col items-center justify-center gap-4 text-center animate-pulse">
+                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                      <FileText size={32} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-foreground">AUTO-CAPTURE ACTIVE</p>
+                      <p className="text-xs text-muted-foreground mt-1">Please show your PAN card to the camera. Countdown starts automatically.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative group animate-in fade-in zoom-in duration-300">
+                    <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-center gap-4">
+                      <div className="w-14 h-14 rounded-lg overflow-hidden border border-emerald-500/20 bg-black flex-shrink-0">
+                         <img src={panImage} className="w-full h-full object-cover" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-emerald-400 truncate">Captured Successfully</p>
+                        <p className="text-[10px] text-emerald-500/60 uppercase font-bold">OCR ANALYSIS READY</p>
+                      </div>
+                      <button 
+                        onClick={() => { setPanImage(null); setPanFileName(''); setIsCapturingPan(true); }}
+                        className="p-2 hover:bg-amber-500/10 rounded-lg text-muted-foreground hover:text-amber-400 transition-colors flex flex-col items-center gap-0.5"
+                      >
+                        <X size={16} />
+                        <span className="text-[8px] font-bold">RETAKE</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-                <label
-                  htmlFor="pan-upload"
-                  className={`flex flex-col items-center justify-center gap-3 border-2 border-dashed rounded-xl p-8 cursor-pointer transition-all ${
-                    panImage ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-border hover:border-primary/50 hover:bg-primary/5'
-                  }`}
-                >
-                  {panImage
-                    ? <><CheckCircle size={28} className="text-emerald-400" /><span className="text-emerald-300 text-sm font-medium">{panFileName}</span></>
-                    : <><Upload size={28} className="text-muted-foreground" /><span className="text-muted-foreground text-sm">{t('clickToUpload')}</span><span className="text-muted-foreground/60 text-xs">{t('fileTypes')}</span></>
-                  }
-                  <input id="pan-upload" type="file" accept="image/*,.pdf" className="hidden" onChange={handlePanUpload} />
-                </label>
+                {panImage && (
+                  <div className="bg-secondary/30 border border-border rounded-xl p-4 space-y-3 mt-4">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase">Extracted Details (Verify & Edit)</p>
+                    {isOcrLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-primary animate-pulse">
+                        <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                        Scanning document...
+                      </div>
+                    ) : ocrError ? (
+                      <p className="text-sm text-destructive">{ocrError}</p>
+                    ) : (
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={ocrData?.panNumber || ''}
+                          onChange={(e) => setOcrData(prev => prev ? { ...prev, panNumber: e.target.value } : null)}
+                          placeholder="PAN Number"
+                          className="w-full bg-background border border-border focus:border-primary rounded-lg px-3 py-2 text-sm text-foreground outline-none transition-colors uppercase"
+                        />
+                        <input
+                          type="text"
+                          value={ocrData?.panName || ''}
+                          onChange={(e) => setOcrData(prev => prev ? { ...prev, panName: e.target.value } : null)}
+                          placeholder="Full Name"
+                          className="w-full bg-background border border-border focus:border-primary rounded-lg px-3 py-2 text-sm text-foreground outline-none transition-colors uppercase"
+                        />
+                        <input
+                          type="text"
+                          value={ocrData?.dob || ''}
+                          onChange={(e) => setOcrData(prev => prev ? { ...prev, dob: e.target.value } : null)}
+                          placeholder="Date of Birth (DD/MM/YYYY)"
+                          className="w-full bg-background border border-border focus:border-primary rounded-lg px-3 py-2 text-sm text-foreground outline-none transition-colors"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
 
-                <div className="flex gap-3">
+                <div className="space-y-3">
                   <button
                     id="btn-proceed-submit"
                     onClick={() => { setPhase('complete'); handleSubmit(); }}
                     disabled={isProcessing || !panImage}
-                    className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-medium text-sm transition-all ${
+                    className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-medium text-sm transition-all ${
                       !panImage || isProcessing
                         ? 'bg-secondary text-muted-foreground cursor-not-allowed border border-border'
-                        : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white hover:opacity-90'
+                        : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white-always shadow-lg shadow-emerald-500/20'
                     }`}
                   >
                     {isProcessing ? (
                       <div className="w-5 h-5 border-[3px] border-white/30 border-t-white rounded-full animate-spin" />
                     ) : (
-                      <><CheckCircle size={18} /> {panImage ? t('submitAndAnalyze') : t('pleaseUploadPAN')}</>
+                      <><CheckCircle size={18} /> {panImage ? t('submitAndAnalyze') : 'Waiting for ID...'}</>
                     )}
                   </button>
+
+                  {!panImage && (
+                    <label 
+                      htmlFor="manual-pan-upload" 
+                      className="w-full flex items-center justify-center gap-2 py-2 text-[11px] font-bold text-muted-foreground hover:text-primary transition-colors cursor-pointer border border-dashed border-border rounded-lg hover:border-primary/30"
+                    >
+                      <Upload size={12} />
+                      {(t('manualUpload') || 'Manual Upload').toUpperCase()}
+                      <input id="manual-pan-upload" type="file" accept="image/*,.pdf" className="hidden" onChange={handlePanUpload} />
+                    </label>
+                  )}
                 </div>
               </div>
             )}

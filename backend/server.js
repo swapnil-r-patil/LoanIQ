@@ -24,10 +24,13 @@ initFirebase();
 const processDataRoute = require('./routes/processData');
 const adminRoutes = require('./routes/adminRoutes');
 const userRoutes = require('./routes/userRoutes');
+const ocrRoute = require('./routes/ocrRoute');
 
 app.use('/', processDataRoute);
 app.use('/api/admin', adminRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/ocr', ocrRoute);
+
 
 // Health check
 app.get('/health', (req, res) => {

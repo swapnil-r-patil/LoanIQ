@@ -57,12 +57,21 @@ function parseTranscript(transcript) {
   if (/lakh|lac/i.test(text) && loanAmount < 1000) loanAmount = loanAmount * 100000;
   if (/crore|karod/i.test(text) && loanAmount < 100) loanAmount = loanAmount * 10000000;
 
+  // Extract age - look for age/old/umar near a number
+  let ageRaw = extractField(text, [
+    /(?:age|u[m]?ar|vaya|vays)[^\d]*([\d]+)/i,
+    /([\d]+)\s*(?:years|yrs|saal|varsh|vayas)/i,
+    /(?:i am|mai|mee)\s*([\d]+)\s*(?:years|saal|varsh)/i,
+  ]);
+  const age = parseInt(ageRaw, 10) || null;
+
   return {
     name: name || 'Unknown',
     income: income || 0,
     jobType,
     loanPurpose: loanPurpose || 'personal',
     loanAmount: loanAmount || 0,
+    age: age,
   };
 }
 

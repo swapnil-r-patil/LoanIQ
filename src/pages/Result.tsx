@@ -5,7 +5,7 @@ import { useUserAuth } from '../context/UserAuthContext';
 import { useLang } from '../context/LanguageContext';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import ThemeToggle from '../components/ThemeToggle';
-import { CheckCircle, XCircle, AlertCircle, TrendingUp, FileText, Banknote, ChevronRight, RotateCcw, LayoutDashboard } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, TrendingUp, FileText, Banknote, ChevronRight, RotateCcw, LayoutDashboard, Calendar } from 'lucide-react';
 
 function CreditMeter({ score }: { score: number }) {
   const pct = Math.min(100, Math.max(0, (score / 900) * 100));
@@ -367,6 +367,84 @@ export default function Result() {
                 <div className="p-3 bg-red-500/5 border border-red-500/20 rounded-xl">
                   <div className="text-red-300 text-xs font-semibold mb-1">⚠️ Issue Detected</div>
                   <div className="text-muted-foreground text-xs leading-relaxed">{report.panDetails.panIssueReason}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Age Verification Summary */}
+        {report?.ageAnalysis && (
+          <div className="bg-card border border-border rounded-2xl p-5">
+            <div className="text-muted-foreground text-xs font-medium mb-4 uppercase tracking-wider flex items-center gap-2">
+              <Calendar size={14} className="text-primary" />
+              AI Age Verification
+            </div>
+            
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-secondary/40 p-3 rounded-xl border border-border/50 text-center">
+                <div className="text-muted-foreground text-[10px] uppercase font-bold mb-1">Stated (User)</div>
+                <div className="text-foreground text-xl font-bold">{report.ageAnalysis.statedAge || '—'}</div>
+                <div className="text-[9px] text-muted-foreground mt-1">From Interview</div>
+              </div>
+              <div className="bg-secondary/40 p-3 rounded-xl border border-border/50 text-center">
+                <div className="text-muted-foreground text-[10px] uppercase font-bold mb-1">Identity (ID)</div>
+                <div className="text-foreground text-xl font-bold">{report.ageAnalysis.idAge || '—'}</div>
+                <div className="text-[9px] text-muted-foreground mt-1">From PAN OCR</div>
+              </div>
+              <div className="bg-secondary/40 p-3 rounded-xl border border-border/50 text-center flex flex-col items-center justify-center">
+                <div className="text-muted-foreground text-[10px] uppercase font-bold mb-1">AI Inference</div>
+                {report.ageAnalysis.aiModelConnected ? (
+                  <>
+                    <div className="text-foreground text-xl font-bold">{report.ageAnalysis.realAiAge || '—'}</div>
+                    <div className="text-[9px] text-emerald-400 mt-1 font-bold">Confidence: {report.ageAnalysis.realAiConfidence}%</div>
+                  </>
+                ) : (
+                  <div className="text-red-400 text-[10px] font-bold leading-tight px-1">
+                    No AI model connected
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Validation Logic */}
+            <div className="mt-4 space-y-2">
+              {report.ageAnalysis.realAiAge && report.ageAnalysis.idAge && (
+                <div className="p-2 bg-secondary/20 rounded-lg flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold">AI vs ID</span>
+                  <div className="text-xs font-bold">
+                    {Math.abs(report.ageAnalysis.realAiAge - report.ageAnalysis.idAge) <= 5 ? (
+                      <span className="text-emerald-400 flex items-center gap-1"><CheckCircle size={12}/> Verified</span>
+                    ) : (
+                      <span className="text-red-400 flex items-center gap-1"><XCircle size={12}/> Mismatch</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {report.ageAnalysis.statedAge && report.ageAnalysis.idAge && (
+                <div className="p-2 bg-secondary/20 rounded-lg flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold">Stated vs ID</span>
+                  <div className="text-xs font-bold">
+                    {Math.abs(report.ageAnalysis.statedAge - report.ageAnalysis.idAge) <= 3 ? (
+                      <span className="text-emerald-400 flex items-center gap-1"><CheckCircle size={12}/> Verified</span>
+                    ) : (
+                      <span className="text-red-400 flex items-center gap-1"><XCircle size={12}/> Mismatch</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {report.ageAnalysis.realAiAge && report.ageAnalysis.statedAge && (
+                <div className="p-2 bg-secondary/20 rounded-lg flex items-center justify-between">
+                  <span className="text-[10px] text-muted-foreground uppercase font-bold">Interview vs AI</span>
+                  <div className="text-xs font-bold">
+                    {Math.abs(report.ageAnalysis.realAiAge - report.ageAnalysis.statedAge) <= 10 ? (
+                      <span className="text-emerald-400 flex items-center gap-1"><CheckCircle size={12}/> Consistent</span>
+                    ) : (
+                      <span className="text-red-400 flex items-center gap-1"><XCircle size={12}/> Inconsistent</span>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

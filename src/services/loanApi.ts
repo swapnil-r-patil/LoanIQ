@@ -7,6 +7,9 @@ export interface ProcessDataPayload {
   liveness: boolean;
   location: string | null;
   userId?: string | null;
+  faceAge?: number | null;
+  userFaceImage?: string | null;
+  faceLandmarks?: any | null;
 }
 
 export interface LoanOffer {
@@ -59,13 +62,6 @@ export interface ProcessDataResponse {
 }
 
 export async function processLoanData(payload: ProcessDataPayload): Promise<ProcessDataResponse> {
-  const formData = new URLSearchParams();
-  formData.append('transcript', payload.transcript);
-  formData.append('liveness', String(payload.liveness));
-  if (payload.panImage) formData.append('panImage', payload.panImage);
-  if (payload.location) formData.append('location', payload.location);
-  if (payload.userId) formData.append('userId', payload.userId);
-
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 50000);
 
@@ -73,8 +69,8 @@ export async function processLoanData(payload: ProcessDataPayload): Promise<Proc
   try {
     response = await fetch(`${API_BASE}/process-data`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: formData.toString(),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
       signal: controller.signal
     });
   } catch (err: any) {

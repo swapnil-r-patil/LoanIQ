@@ -14,6 +14,7 @@ const {
 } = require('../services/creditEngine');
 const { generateExplanation } = require('../services/llmService');
 const { saveReport } = require('../services/dbService');
+const { estimateAgeReal } = require('../services/aiService');
 
 // Use memory storage for uploaded files
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -22,35 +23,86 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
  * POST /process-data
  * Main loan processing endpoint
  */
-router.post('/process-data', upload.none(), async (req, res) => {
+router.post('/process-data', async (req, res) => {
   try {
-    const { transcript, panImage, liveness, location, userId } = req.body;
+    const { transcript, panImage, userFaceImage, faceLandmarks, liveness, location, userId, faceAge } = req.body;
 
     console.log('\n📋 Processing loan application...');
     console.log('Transcript length:', transcript?.length || 0);
     console.log('PAN image provided:', !!panImage);
+    if (panImage) {
+      console.log('PAN Image Start:', panImage.substring(0, 100));
+      console.log('PAN Image Length:', panImage.length);
+    }
     console.log('Liveness:', liveness);
     console.log('Location:', location);
     console.log('User ID:', userId || 'guest');
+    console.log('Face Age (Biometric):', faceAge);
 
     // ─── STEP 1: Parse Transcript ───────────────────────────────────────────
     const parsedData = parseTranscript(transcript || '');
     console.log('✅ Parsed data:', parsedData);
 
-    const { name, income, jobType, loanPurpose, loanAmount } = parsedData;
+    const { name, income, jobType, loanPurpose, loanAmount, age: statedAge } = parsedData;
 
     // ─── STEP 2: PAN OCR ────────────────────────────────────────────────────
     let panDetails = { panNumber: null, panName: null, dob: null, panIssue: null, panIssueReason: null, quality: null, nameMatch: null };
-    if (panImage) {
+    const spokenName = (name && name !== 'Unknown') ? name : '';
+    console.log('👤 Spoken name for matching:', spokenName || '(not detected)');
+    
+    if (req.body.editedPanDetails) {
+      console.log('✅ Using manually verified PAN details');
+      const edited = typeof req.body.editedPanDetails === 'string' 
+        ? JSON.parse(req.body.editedPanDetails) 
+        : req.body.editedPanDetails;
+      
+      // We must recalculate the name match score to ensure security points are awarded
+      const { computeNameMatch } = require('../services/ocrService');
+      const nameMatch = computeNameMatch(edited.panName, spokenName);
+      
+      panDetails = {
+        panNumber: edited.panNumber || 'NOT_FOUND',
+        panName: edited.panName || 'NOT_FOUND',
+        dob: edited.dob || null,
+        panIssue: null,
+        panIssueReason: null,
+        quality: { score: 100, label: 'Manually Verified', confidence: 100 },
+        nameMatch
+      };
+    } else if (panImage) {
       console.log('🔍 Running OCR...');
-      // Only pass real spoken name (not fallback 'Unknown') for name matching
-      const spokenName = (name && name !== 'Unknown') ? name : '';
-      console.log('👤 Spoken name for matching:', spokenName || '(not detected)');
       panDetails = await extractPanDetails(panImage, spokenName);
       console.log('✅ PAN Details:', { ...panDetails, rawText: '[hidden]' });
-      if (panDetails.nameMatch) {
-        console.log('📊 Name Match Result:', panDetails.nameMatch);
+    }
+
+    // ─── STEP 2b: Age Logic ─────────────────────────────────────────────────
+    let idAge = null;
+    if (panDetails.dob) {
+      const dobParts = panDetails.dob.split(/[\\/\-]/);
+      const birthYear = parseInt(dobParts[dobParts.length - 1], 10);
+      if (!isNaN(birthYear)) {
+        idAge = new Date().getFullYear() - birthYear;
       }
+    }
+    const faceAgeNum = faceAge ? parseInt(faceAge, 10) : null;
+
+    // ─── STEP 2c: REAL AI Age Inference ─────────────────────────────────────
+    let realAiData = null;
+    let aiModelConnected = true;
+    try {
+      const targetImage = userFaceImage || panImage;
+      const landmarks = typeof faceLandmarks === 'string' ? JSON.parse(faceLandmarks) : faceLandmarks;
+      if (targetImage) {
+        const base64Data = targetImage.includes(',') ? targetImage.split(',')[1] : targetImage;
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        realAiData = await estimateAgeReal(imageBuffer, landmarks);
+      } else {
+        console.warn('⚠️ No image provided for AI Inference.');
+        aiModelConnected = false;
+      }
+    } catch (e) {
+      aiModelConnected = false;
+      console.warn('Real AI Inference skipped:', e.message);
     }
 
     // ─── STEP 3: Credit Score ────────────────────────────────────────────────
@@ -64,6 +116,9 @@ router.post('/process-data', upload.none(), async (req, res) => {
       nameMatch: panDetails.nameMatch || null,
       loanAmount: loanAmount || 0,
       loanPurpose: loanPurpose || 'personal',
+      faceAge: faceAgeNum,
+      statedAge,
+      idAge,
     });
     console.log('✅ Credit Score:', creditScore);
 
@@ -216,9 +271,19 @@ router.post('/process-data', upload.none(), async (req, res) => {
       riskScore,
       riskComponents: components,
       riskLevel,
+      ageAnalysis: {
+        statedAge,
+        idAge,
+        faceAge: faceAgeNum,
+        realAiAge: realAiData?.age || null,
+        realAiConfidence: realAiData?.confidence || null,
+        aiModelConnected
+      },
       verification: {
         liveness: livenessPass,
         panVerified: !!panDetails.panNumber,
+        ageVerified: idAge && statedAge ? Math.abs(idAge - statedAge) <= 2 : false,
+        biometricAgeVerified: idAge && faceAgeNum ? Math.abs(idAge - faceAgeNum) <= 5 : false,
       },
       rejectionReasons,
       decision,

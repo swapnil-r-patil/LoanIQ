@@ -77,10 +77,19 @@ export default function Processing() {
       const payload = {
         transcript: kycData?.transcript || state.transcript || '',
         panImage: kycData?.panImage || state.panImage || null,
+        userFaceImage: kycData?.userFaceImage || null,
+        faceLandmarks: kycData?.faceLandmarks || null,
         liveness: kycData?.livenessPass ?? state.livenessPass ?? false,
         location: kycData?.location || state.location || null,
         userId: user?.userId || null,
+        faceAge: kycData?.faceAge || state.faceAge || null,
+        editedPanDetails: kycData?.editedPanDetails || null,
       };
+      
+      console.log('🚀 Sending API Payload:', {
+        ...payload,
+        panImage: payload.panImage ? `${payload.panImage.substring(0, 50)}... (${payload.panImage.length} chars)` : 'MISSING'
+      });
 
       const result = await processLoanData(payload);
       setState(prev => ({ ...prev, result }));
